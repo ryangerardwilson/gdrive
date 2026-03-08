@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from pathlib import Path
 
 from . import __version__
@@ -26,6 +29,8 @@ from .sync import delete_state, sync_registration
 def compact_usage() -> str:
     return "\n".join(
         [
+            "usage: gdrive -v",
+            "       gdrive -u",
             "usage: gdrive reg <local_dir> <drive_path>",
             "       gdrive ls",
             "       gdrive run [id]",
@@ -84,6 +89,7 @@ def ensure_setup(interactive: bool) -> tuple[Path, str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gdrive", description="Google Drive backup CLI")
     parser.add_argument("-v", action="store_true", dest="version", help="print version")
+    parser.add_argument("-u", action="store_true", dest="upgrade", help="upgrade to latest release")
     subs = parser.add_subparsers(dest="command")
 
     reg_p = subs.add_parser("reg", help="register folder sync")
@@ -130,6 +136,27 @@ def drive_client() -> DriveClient:
     secret = require_client_secret(config)
     creds = load_credentials(secret)
     return DriveClient(creds)
+
+
+def upgrade_app() -> int:
+    script_url = "https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh"
+    with urllib.request.urlopen(script_url) as response:
+        script_body = response.read()
+    with tempfile.NamedTemporaryFile(delete=False) as handle:
+        handle.write(script_body)
+        script_path = Path(handle.name)
+    try:
+        script_path.chmod(0o700)
+        env = os.environ.copy()
+        result = subprocess.run(
+            ["/usr/bin/env", "bash", str(script_path)],
+            check=False,
+            text=True,
+            env=env,
+        )
+        return result.returncode
+    finally:
+        script_path.unlink(missing_ok=True)
 
 
 def write_timer_units() -> None:
@@ -230,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.version:
             print(__version__)
             return 0
+        if args.upgrade:
+            return upgrade_app()
         if args.command == "reg":
             ensure_setup(interactive=True)
             reg = add_registration(args.local_dir, args.drive_path)

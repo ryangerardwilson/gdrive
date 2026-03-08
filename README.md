@@ -12,6 +12,12 @@ pip install -r requirements.txt
 python main.py -h
 ```
 
+Release install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh | bash
+```
+
 ## Google OAuth setup
 
 1. Open Google Cloud Console.
@@ -48,6 +54,8 @@ Example config:
 ```bash
 gdrive
 gdrive -h
+gdrive -v
+gdrive -u
 gdrive reg <local_dir> <drive_path>
 gdrive ls
 gdrive run
@@ -63,6 +71,7 @@ Examples:
 ```bash
 python main.py reg ~/Documents "Documents"
 python main.py reg ~/Pictures "Pictures"
+python main.py -v
 python main.py ls
 python main.py run
 python main.py run 1
