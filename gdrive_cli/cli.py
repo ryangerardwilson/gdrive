@@ -149,7 +149,7 @@ def upgrade_app() -> int:
         script_path.chmod(0o700)
         env = os.environ.copy()
         result = subprocess.run(
-            ["/usr/bin/env", "bash", str(script_path)],
+            ["/usr/bin/env", "bash", str(script_path), "-u"],
             check=False,
             text=True,
             env=env,

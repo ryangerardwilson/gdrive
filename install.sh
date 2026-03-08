@@ -6,35 +6,58 @@ REPO="ryangerardwilson/gdrive"
 APP_HOME="$HOME/.${APP}"
 INSTALL_DIR="$APP_HOME/bin"
 APP_DIR="$APP_HOME/app"
+FILENAME="${APP}-linux-x64.tar.gz"
+
+MUTED='\033[0;2m'
+RED='\033[0;31m'
+NC='\033[0m'
 
 usage() {
-  cat <<USAGE
-${APP} Installer
+  cat <<EOF
+${APP^^} Installer
 
 Usage: install.sh [options]
 
 Options:
-  -h, --help              Display this help message
-  -v, --version <version> Install a specific version
-  -b, --binary <path>     Install from a local binary instead of downloading
-      --no-modify-path    Don't modify shell config files
-USAGE
+  -h                         Show this help and exit
+  -v [<version>]             Install a specific release (e.g., 0.1.0 or v0.1.0)
+                             Without an argument, print the latest release version and exit
+  -u                         Reinstall the latest release if it is newer (upgrade)
+  -b, --binary <path>        Install from a local binary bundle
+      --no-modify-path       Skip editing shell rc files
+EOF
 }
+
+info() { echo -e "${MUTED}$1${NC}"; }
+die() { echo -e "${RED}$1${NC}" >&2; exit 1; }
 
 requested_version=${VERSION:-}
 binary_path=""
 no_modify_path=false
+show_latest=false
+upgrade=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -h|--help) usage; exit 0 ;;
-    -v|--version)
-      [[ -n "${2:-}" ]] || { echo "Error: --version requires an argument" >&2; exit 1; }
-      requested_version="$2"
-      shift 2
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -v)
+      if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+        requested_version="$2"
+        shift 2
+      else
+        show_latest=true
+        shift
+      fi
+      ;;
+    -u|--upgrade)
+      upgrade=true
+      shift
       ;;
     -b|--binary)
-      [[ -n "${2:-}" ]] || { echo "Error: --binary requires a path" >&2; exit 1; }
+      [[ -n "${2:-}" ]] || die "--binary requires a path"
       binary_path="$2"
       shift 2
       ;;
@@ -42,92 +65,147 @@ while [[ $# -gt 0 ]]; do
       no_modify_path=true
       shift
       ;;
+    --version)
+      info "--version is deprecated. Use -v instead."
+      if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+        requested_version="$2"
+        shift 2
+      else
+        show_latest=true
+        shift
+      fi
+      ;;
+    --help)
+      info "--help is deprecated. Use -h instead."
+      usage
+      exit 0
+      ;;
     *)
-      echo "Warning: Unknown option '$1'" >&2
+      info "Unknown option $1"
       shift
       ;;
   esac
 done
 
+_latest_version=""
+get_latest_version() {
+  if [[ -z "${_latest_version}" ]]; then
+    _latest_version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+      | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"\\n]*\)".*/\1/p')
+    [[ -n "${_latest_version}" ]] || die "Unable to determine latest release"
+  fi
+  printf '%s\n' "${_latest_version}"
+}
+
+if $show_latest; then
+  [[ "$upgrade" == false && -z "$binary_path" && -z "$requested_version" ]] || \
+    die "-v (no arg) cannot be combined with other options"
+  get_latest_version
+  exit 0
+fi
+
+if $upgrade; then
+  [[ -z "$binary_path" ]] || die "-u cannot be used with -b/--binary"
+  [[ -z "$requested_version" ]] || die "-u cannot be combined with -v"
+  latest=$(get_latest_version)
+  if command -v "$APP" >/dev/null 2>&1; then
+    installed=$($APP -v 2>/dev/null || true)
+    installed="${installed#v}"
+    if [[ -n "$installed" && "$installed" == "$latest" ]]; then
+      info "${APP} ${latest} already installed"
+      exit 0
+    fi
+  fi
+  requested_version="$latest"
+fi
+
 mkdir -p "$INSTALL_DIR"
-mkdir -p "$APP_DIR"
 
 if [[ -n "$binary_path" ]]; then
-  [[ -f "$binary_path" ]] || { echo "Binary not found: $binary_path" >&2; exit 1; }
-  mkdir -p "$APP_DIR/${APP}"
-  cp "$binary_path" "$APP_DIR/${APP}/${APP}"
-  chmod 755 "$APP_DIR/${APP}/${APP}"
-  specific_version="local"
+  [[ -f "$binary_path" ]] || die "Binary not found: $binary_path"
+  info "Installing ${APP^^} from local binary"
+  mkdir -p "$APP_DIR"
+  cp "$binary_path" "$INSTALL_DIR/$APP"
+  chmod 755 "$INSTALL_DIR/$APP"
+  installed_label="local"
 else
-  command -v curl >/dev/null 2>&1 || { echo "'curl' is required but not installed." >&2; exit 1; }
-  command -v tar >/dev/null 2>&1 || { echo "'tar' is required but not installed." >&2; exit 1; }
-
   raw_os=$(uname -s)
   arch=$(uname -m)
-  [[ "$raw_os" == "Linux" ]] || { echo "Unsupported OS: $raw_os" >&2; exit 1; }
-  [[ "$arch" == "x86_64" ]] || { echo "Unsupported arch: $arch" >&2; exit 1; }
+  [[ "$raw_os" == "Linux" ]] || die "Unsupported OS: $raw_os"
+  [[ "$arch" == "x86_64" ]] || die "Unsupported arch: $arch"
+  command -v curl >/dev/null 2>&1 || die "'curl' is required"
+  command -v tar >/dev/null 2>&1 || die "'tar' is required"
 
   if [[ -z "$requested_version" ]]; then
-    release_url_prefix="https://github.com/${REPO}/releases/latest/download"
-    specific_version="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name": *"v\([^\"]*\)".*/\1/p' || true)"
-    [[ -n "$specific_version" ]] || specific_version="latest"
+    version_label=$(get_latest_version)
+    url="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
   else
     requested_version="${requested_version#v}"
-    release_url_prefix="https://github.com/${REPO}/releases/download/v${requested_version}"
-    specific_version="$requested_version"
+    version_label="$requested_version"
+    url="https://github.com/${REPO}/releases/download/v${requested_version}/${FILENAME}"
+    http_status=$(curl -sI -o /dev/null -w "%{http_code}" \
+      "https://github.com/${REPO}/releases/tag/v${requested_version}")
+    [[ "$http_status" != "404" ]] || die "Release v${requested_version} not found"
   fi
 
-  if command -v "${APP}" >/dev/null 2>&1; then
-    installed_version=$("${APP}" -v 2>/dev/null || true)
-    if [[ -n "$installed_version" && "$installed_version" == "$specific_version" ]]; then
-      echo "${APP} version ${specific_version} already installed"
+  if command -v "$APP" >/dev/null 2>&1 && [[ "$version_label" != "latest" ]]; then
+    installed=$($APP -v 2>/dev/null || true)
+    installed="${installed#v}"
+    if [[ -n "$installed" && "$installed" == "$version_label" ]]; then
+      info "${APP} ${version_label} already installed"
       exit 0
     fi
   fi
 
-  tmp_dir="${TMPDIR:-/tmp}/${APP}_install_$$"
-  archive_path="${tmp_dir}/${APP}-linux-x64.tar.gz"
-  mkdir -p "$tmp_dir"
-  curl -fL "${release_url_prefix}/${APP}-linux-x64.tar.gz" -o "$archive_path"
-  tar -xzf "$archive_path" -C "$tmp_dir"
-
+  info "Installing ${APP^^} version ${version_label}"
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/${APP}.XXXXXX")
+  curl -# -L -o "$tmp_dir/$FILENAME" "$url"
+  tar -xzf "$tmp_dir/$FILENAME" -C "$tmp_dir"
+  [[ -f "$tmp_dir/${APP}/${APP}" ]] || die "Archive missing ${APP}/${APP}"
   rm -rf "$APP_DIR"
-  mkdir -p "$APP_DIR/${APP}"
-  cp -a "$tmp_dir/${APP}/." "$APP_DIR/${APP}/"
-  chmod 755 "$APP_DIR/${APP}/${APP}"
+  mkdir -p "$APP_DIR"
+  mv "$tmp_dir/${APP}" "$APP_DIR"
   rm -rf "$tmp_dir"
-fi
 
-cat > "${INSTALL_DIR}/${APP}" <<SHIM
+  cat > "$INSTALL_DIR/$APP" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-"\${HOME}/.${APP}/app/${APP}/${APP}" "\$@"
-SHIM
-chmod 755 "${INSTALL_DIR}/${APP}"
-
-add_to_path() {
-  local config_file=$1
-  local command=$2
-  if grep -Fxq "$command" "$config_file" 2>/dev/null; then
-    return
-  fi
-  if [[ -w "$config_file" || ! -e "$config_file" ]]; then
-    {
-      echo ""
-      echo "# ${APP}"
-      echo "$command"
-    } >> "$config_file"
-  else
-    echo "Add this to your shell config:" >&2
-    echo "$command" >&2
-  fi
-}
-
-if [[ "$no_modify_path" != true ]]; then
-  path_line='export PATH="$HOME/.gdrive/bin:$PATH"'
-  [[ -f "$HOME/.bashrc" || ! -e "$HOME/.bashrc" ]] && add_to_path "$HOME/.bashrc" "$path_line"
-  [[ -f "$HOME/.zshrc" || ! -e "$HOME/.zshrc" ]] && add_to_path "$HOME/.zshrc" "$path_line"
+"${HOME}/.${APP}/app/${APP}/${APP}" "\$@"
+EOF
+  chmod 755 "$INSTALL_DIR/$APP"
+  installed_label="$version_label"
 fi
 
-echo "installed ${APP} ${specific_version}"
-echo "binary: $HOME/.gdrive/bin/${APP}"
+maybe_add_path() {
+  local command=$1
+  local rc_files=()
+  local shell_name
+  shell_name=$(basename "${SHELL:-bash}")
+  case "$shell_name" in
+    zsh) rc_files=("$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.config/zsh/.zshrc") ;;
+    bash) rc_files=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile") ;;
+    fish) rc_files=("$HOME/.config/fish/config.fish") ;;
+    *) rc_files=("$HOME/.profile") ;;
+  esac
+  for rc in "${rc_files[@]}"; do
+    [[ -w "$rc" ]] || continue
+    if grep -Fq "$command" "$rc" 2>/dev/null; then
+      return
+    fi
+    printf '\n# %s\n%s\n' "${APP^^}" "$command" >> "$rc"
+    info "Added ${APP^^} to PATH in $rc"
+    return
+  done
+  info "Add to PATH manually: $command"
+}
+
+if ! $no_modify_path && [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+  if [[ $(basename "${SHELL:-bash}") == "fish" ]]; then
+    maybe_add_path "fish_add_path $INSTALL_DIR"
+  else
+    maybe_add_path "export PATH=$INSTALL_DIR:\$PATH"
+  fi
+fi
+
+info "Installed ${APP^^} (${installed_label:-unknown}) to $INSTALL_DIR/$APP"
+info "Run: ${APP} -h"
