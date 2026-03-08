@@ -4,18 +4,20 @@ Google Drive backup CLI with local-first sync semantics.
 
 ## Install
 
+Binary install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh | bash
+```
+
+Source install:
+
 ```bash
 cd ~/Apps/gdrive
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python main.py -h
-```
-
-Release install:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh | bash
 ```
 
 ## Google OAuth setup
