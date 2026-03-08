@@ -61,7 +61,7 @@ jobs:
               "$PYBIN" -m pip install --only-binary=:all: -r requirements.txt
               "$PYBIN" -m pip install --only-binary=:all: pyinstaller
 
-              sed -i -E "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" gdrive_cli/_version.py
+              sed -i -E "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" _version.py
 
               "$PYBIN" -m PyInstaller --clean --onedir --name gdrive \
                 main.py
