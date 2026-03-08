@@ -8,6 +8,11 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+try:
+    import charset_normalizer  # noqa: F401
+except Exception:  # pragma: no cover - optional during source-only edge cases
+    charset_normalizer = None
+
 from . import __version__
 from .config import (
     add_registration,

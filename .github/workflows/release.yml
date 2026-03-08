@@ -64,6 +64,7 @@ jobs:
               sed -i -E "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" _version.py
 
               "$PYBIN" -m PyInstaller --clean --onedir --name gdrive \
+                --collect-all charset_normalizer \
                 main.py
 
               tar -C dist -czf gdrive-linux-x64.tar.gz gdrive
