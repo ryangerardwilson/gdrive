@@ -47,4 +47,4 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 - A user can register one or more local folders with Drive target paths under a numeric preset.
 - `run` makes Drive match local content across every configured preset, including local deletes.
 - Content-preserving local file renames are propagated as Drive moves/renames when detectable; otherwise the end state must still match local.
-- `ti` installs one hourly user timer that runs the same global sync command.
+- `ti` installs one hourly user timer that runs the same global sync command and sends a success notification through `notify-send`.

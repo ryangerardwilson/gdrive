@@ -108,7 +108,7 @@ Notes:
 
 ## Timer
 
-`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets.
+`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets. On success, the service sends a desktop notification through `notify-send` for Mako.
 
 ```bash
 python main.py ti

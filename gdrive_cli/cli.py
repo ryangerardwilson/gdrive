@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -229,6 +230,14 @@ def write_timer_units() -> None:
     timer_path = systemd_dir / f"{unit_name()}.timer"
     entrypoint = Path(__file__).resolve().parents[1] / "main.py"
     python_bin = Path(sys.executable).resolve()
+    run_command = " ".join(
+        [
+            shlex.quote(str(python_bin)),
+            shlex.quote(str(entrypoint)),
+            "run",
+        ]
+    )
+    notify_command = "notify-send 'gdrive' 'Hourly backup finished successfully'"
     service_body = "\n".join(
         [
             "[Unit]",
@@ -237,7 +246,7 @@ def write_timer_units() -> None:
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={entrypoint.parent}",
-            f"ExecStart={python_bin} {entrypoint} run",
+            f"ExecStart=/usr/bin/env bash -lc {shlex.quote(f'{run_command} && {notify_command}')}",
             "",
         ]
     )
