@@ -1,8 +1,15 @@
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from gdrive_cli.cli import compact_usage, ensure_backup_root_name, ensure_client_secret
+from gdrive_cli.cli import (
+    _build_runtime_command,
+    compact_usage,
+    ensure_backup_root_name,
+    ensure_client_secret,
+    write_timer_units,
+)
 
 
 class CliUsageTests(unittest.TestCase):
@@ -43,3 +50,19 @@ class CliUsageTests(unittest.TestCase):
                 with patch("sys.stdin.isatty", return_value=True):
                     with patch("builtins.input", return_value=secret_path):
                         self.assertEqual(str(ensure_client_secret("2", interactive=True)), secret_path)
+
+    def test_build_runtime_command_uses_launcher_only_when_frozen(self):
+        with patch("sys.executable", "/tmp/gdrive"), patch("sys.frozen", True, create=True):
+            self.assertEqual(_build_runtime_command("run"), "/tmp/gdrive run")
+
+    def test_write_timer_units_uses_launcher_only_when_frozen(self):
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with patch("gdrive_cli.cli.ensure_dirs"), patch(
+                "gdrive_cli.cli.Path.home", return_value=home
+            ), patch("sys.executable", "/tmp/gdrive"), patch("sys.frozen", True, create=True):
+                write_timer_units()
+            service_path = home / ".config" / "systemd" / "user" / "gdrive.service"
+            service_body = service_path.read_text(encoding="utf-8")
+            self.assertIn("ExecStart=/usr/bin/env bash -lc '/tmp/gdrive run &&", service_body)
+            self.assertNotIn("main.py run", service_body)

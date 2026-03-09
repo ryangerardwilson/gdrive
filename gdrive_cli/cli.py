@@ -222,6 +222,15 @@ def unit_name() -> str:
     return "gdrive"
 
 
+def _build_runtime_command(*args: str) -> str:
+    command_parts = [shlex.quote(str(Path(sys.executable).resolve()))]
+    if not getattr(sys, "frozen", False):
+        entrypoint = Path(__file__).resolve().parents[1] / "main.py"
+        command_parts.append(shlex.quote(str(entrypoint)))
+    command_parts.extend(shlex.quote(arg) for arg in args)
+    return " ".join(command_parts)
+
+
 def write_timer_units() -> None:
     ensure_dirs()
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
@@ -229,14 +238,7 @@ def write_timer_units() -> None:
     service_path = systemd_dir / f"{unit_name()}.service"
     timer_path = systemd_dir / f"{unit_name()}.timer"
     entrypoint = Path(__file__).resolve().parents[1] / "main.py"
-    python_bin = Path(sys.executable).resolve()
-    run_command = " ".join(
-        [
-            shlex.quote(str(python_bin)),
-            shlex.quote(str(entrypoint)),
-            "run",
-        ]
-    )
+    run_command = _build_runtime_command("run")
     notify_command = "notify-send 'gdrive' 'Hourly backup finished successfully'"
     service_body = "\n".join(
         [
