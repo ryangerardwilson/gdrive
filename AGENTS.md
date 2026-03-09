@@ -29,7 +29,7 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 - Keep config under XDG config paths and sync state under XDG data paths.
 - Keep OAuth tokens and sync snapshots per preset so multiple Google accounts do not collide.
 - Token filenames should be keyed by a stable internal account key, not the preset number.
-- Do not add legacy-token fallback branches to normal runtime code; if token naming changes, add a separate one-time migration script under `scripts/`.
+- Do not add legacy-token fallback branches to normal runtime code.
 - Persist remote ids per tracked path so future syncs can delete/update the correct Drive items.
 - Prefer small testable helpers for path normalization, state reconciliation, and rename detection.
 - If the client secret path or backup root name is missing for a preset, interactive commands should prompt once and persist them for that preset.
