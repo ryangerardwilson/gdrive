@@ -134,14 +134,23 @@ def print_registrations() -> int:
     if not regs:
         print("no registrations")
         return 0
-    for index, reg in enumerate(regs):
+    sections: list[str] = []
+    for index, reg in enumerate(regs, start=1):
         url = f"https://drive.google.com/drive/folders/{reg.remote_root_id}" if reg.remote_root_id else "-"
-        print(f"{reg.id}")
-        print(f"local: {reg.local_dir}")
-        print(f"drive: {root_name}/{reg.drive_path}")
-        print(f"url: {url}")
-        if index != len(regs) - 1:
-            print()
+        prefix = f"[{index}]"
+        header = prefix + ("-" * max(1, 79 - len(prefix)))
+        sections.append(
+            "\n".join(
+                [
+                    header,
+                    f"id    : {reg.id}",
+                    f"local : {reg.local_dir}",
+                    f"drive : {root_name}/{reg.drive_path}",
+                    f"url   : {url}",
+                ]
+            )
+        )
+    print("\n".join(sections))
     return 0
 
 
