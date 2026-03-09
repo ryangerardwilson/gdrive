@@ -35,16 +35,8 @@ from .sync import delete_state, sync_registration
 
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
-COMMAND_HELP = {
-    "auth": "authorize a Google account and create/update a preset",
-    "reg": "register folder sync",
-    "ls": "list registrations",
-    "run": "run sync",
-    "rm": "remove registration",
-    "ti": "install hourly timer",
-    "td": "disable timer",
-    "st": "timer status",
-}
+PRESET_COMMANDS = {"reg", "ls", "rm"}
+GLOBAL_COMMANDS = {"run", "ti", "td", "st"}
 
 
 def _muted_text(text: str) -> str:
@@ -61,11 +53,11 @@ def compact_usage() -> str:
             "       gdrive auth <client_secret_path>",
             "       gdrive <preset> reg <local_dir> <drive_path>",
             "       gdrive <preset> ls",
-            "       gdrive <preset> run [edit_id]",
+            "       gdrive run",
             "       gdrive <preset> rm <edit_id>",
-            "       gdrive <preset> ti",
-            "       gdrive <preset> td",
-            "       gdrive <preset> st",
+            "       gdrive ti",
+            "       gdrive td",
+            "       gdrive st",
         ]
     )
 
@@ -225,34 +217,34 @@ def upgrade_app() -> int:
         script_path.unlink(missing_ok=True)
 
 
-def unit_name(preset: str) -> str:
-    return f"gdrive-{preset}"
+def unit_name() -> str:
+    return "gdrive"
 
 
-def write_timer_units(preset: str) -> None:
+def write_timer_units() -> None:
     ensure_dirs()
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
     systemd_dir.mkdir(parents=True, exist_ok=True)
-    service_path = systemd_dir / f"{unit_name(preset)}.service"
-    timer_path = systemd_dir / f"{unit_name(preset)}.timer"
+    service_path = systemd_dir / f"{unit_name()}.service"
+    timer_path = systemd_dir / f"{unit_name()}.timer"
     entrypoint = Path(__file__).resolve().parents[1] / "main.py"
     python_bin = Path(sys.executable).resolve()
     service_body = "\n".join(
         [
             "[Unit]",
-            f"Description=gdrive sync preset {preset}",
+            "Description=gdrive sync all presets",
             "",
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={entrypoint.parent}",
-            f"ExecStart={python_bin} {entrypoint} {preset} run",
+            f"ExecStart={python_bin} {entrypoint} run",
             "",
         ]
     )
     timer_body = "\n".join(
         [
             "[Unit]",
-            f"Description=Run gdrive preset {preset} hourly",
+            "Description=Run gdrive hourly",
             "",
             "[Timer]",
             "OnBootSec=5m",
@@ -277,42 +269,46 @@ def systemctl_user(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def install_timer(preset: str) -> int:
-    write_timer_units(preset)
+def install_timer() -> int:
+    write_timer_units()
     systemctl_user("daemon-reload")
-    systemctl_user("enable", "--now", f"{unit_name(preset)}.timer")
-    print(f"timer enabled: {unit_name(preset)}.timer")
+    systemctl_user("enable", "--now", f"{unit_name()}.timer")
+    print(f"timer enabled: {unit_name()}.timer")
     return 0
 
 
-def disable_timer(preset: str) -> int:
-    write_timer_units(preset)
-    systemctl_user("disable", "--now", f"{unit_name(preset)}.timer")
-    print(f"timer disabled: {unit_name(preset)}.timer")
+def disable_timer() -> int:
+    write_timer_units()
+    systemctl_user("disable", "--now", f"{unit_name()}.timer")
+    print(f"timer disabled: {unit_name()}.timer")
     return 0
 
 
-def timer_status(preset: str) -> int:
-    result = systemctl_user("status", f"{unit_name(preset)}.timer")
+def timer_status() -> int:
+    result = systemctl_user("status", f"{unit_name()}.timer")
     print(result.stdout.strip())
     return 0
 
 
-def run_sync(preset: str, target_id: str | None) -> int:
-    account = get_account(load_config(), preset)
-    backup_root_name = require_backup_root_name(account)
-    regs = account.registrations
-    if target_id:
-        regs = [get_registration(preset, target_id)]
-    if not regs:
+def run_sync_all() -> int:
+    config = load_config()
+    did_work = False
+    for preset, account in config.accounts.items():
+        regs = account.registrations
+        if not regs:
+            continue
+        require_client_secret(account)
+        backup_root_name = require_backup_root_name(account)
+        client = drive_client(preset)
+        did_work = True
+        for reg in regs:
+            summary = sync_registration(preset, reg, client, backup_root_name)
+            update_registration(preset, reg)
+            print(
+                f"{preset}:{reg.id}\tcreated={summary.created}\tupdated={summary.updated}\tmoved={summary.moved}\tdeleted={summary.deleted}"
+            )
+    if not did_work:
         raise CliError("no registrations")
-    client = drive_client(preset)
-    for reg in regs:
-        summary = sync_registration(preset, reg, client, backup_root_name)
-        update_registration(preset, reg)
-        print(
-            f"{reg.id}\tcreated={summary.created}\tupdated={summary.updated}\tmoved={summary.moved}\tdeleted={summary.deleted}"
-        )
     return 0
 
 
@@ -323,7 +319,9 @@ def parse_command(preset: str | None, command: str | None, params: list[str]) ->
         raise CliError("preset must be numeric, like `1` or `2`")
     if not command:
         raise CliError("missing command")
-    if command not in COMMAND_HELP:
+    if command in GLOBAL_COMMANDS:
+        raise CliError(f"`{command}` is global: use `gdrive {command}`")
+    if command not in PRESET_COMMANDS:
         raise CliError(f"unknown command `{command}`")
     return str(preset), list(params)
 
@@ -348,6 +346,16 @@ def main(argv: list[str] | None = None) -> int:
             if args.command is None or args.params:
                 raise CliError("usage: gdrive auth <client_secret_path>")
             return auth_account(args.command)
+        if args.preset in {"run", "ti", "td", "st"}:
+            if args.command or args.params:
+                raise CliError(f"usage: gdrive {args.preset}")
+            if args.preset == "run":
+                return run_sync_all()
+            if args.preset == "ti":
+                return install_timer()
+            if args.preset == "td":
+                return disable_timer()
+            return timer_status()
         preset, params = parse_command(args.preset, args.command, args.params)
         if args.command == "reg":
             if len(params) != 2:
@@ -361,11 +369,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise CliError("usage: gdrive <preset> ls")
             ensure_setup(preset, interactive=True)
             return print_registrations(preset)
-        if args.command == "run":
-            if len(params) > 1:
-                raise CliError("usage: gdrive <preset> run [edit_id]")
-            ensure_setup(preset, interactive=False)
-            return run_sync(preset, params[0] if params else None)
         if args.command == "rm":
             if len(params) != 1:
                 raise CliError("usage: gdrive <preset> rm <edit_id>")
@@ -374,21 +377,6 @@ def main(argv: list[str] | None = None) -> int:
             delete_state(preset, reg.id)
             print(f"removed\t{preset}\t{reg.id}\t{reg.local_dir}")
             return 0
-        if args.command == "ti":
-            if params:
-                raise CliError("usage: gdrive <preset> ti")
-            ensure_setup(preset, interactive=True)
-            return install_timer(preset)
-        if args.command == "td":
-            if params:
-                raise CliError("usage: gdrive <preset> td")
-            ensure_setup(preset, interactive=True)
-            return disable_timer(preset)
-        if args.command == "st":
-            if params:
-                raise CliError("usage: gdrive <preset> st")
-            ensure_setup(preset, interactive=True)
-            return timer_status(preset)
         print(compact_usage())
         return 1
     except CliError as exc:

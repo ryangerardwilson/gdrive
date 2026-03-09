@@ -6,11 +6,12 @@ from gdrive_cli.cli import compact_usage, ensure_backup_root_name, ensure_client
 
 
 class CliUsageTests(unittest.TestCase):
-    def test_compact_usage_contains_preset_commands(self):
+    def test_compact_usage_contains_global_and_preset_commands(self):
         usage = compact_usage()
         self.assertIn("gdrive <preset> reg <local_dir> <drive_path>", usage)
-        self.assertIn("gdrive <preset> run [edit_id]", usage)
         self.assertIn("gdrive <preset> ls", usage)
+        self.assertIn("gdrive run", usage)
+        self.assertIn("gdrive ti", usage)
 
     def test_ensure_backup_root_name_prompts_and_saves_for_preset(self):
         with TemporaryDirectory() as tmp:

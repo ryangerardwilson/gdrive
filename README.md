@@ -39,7 +39,7 @@ Recommended setup:
 ```bash
 python main.py auth /path/to/client_secret.json
 python main.py 1 reg ~/Documents "Documents"
-python main.py 1 run
+python main.py run
 ```
 
 ## Storage
@@ -74,12 +74,11 @@ gdrive -u
 gdrive auth <client_secret_path>
 gdrive <preset> reg <local_dir> <drive_path>
 gdrive <preset> ls
-gdrive <preset> run
-gdrive <preset> run <edit_id>
+gdrive run
 gdrive <preset> rm <edit_id>
-gdrive <preset> ti
-gdrive <preset> td
-gdrive <preset> st
+gdrive ti
+gdrive td
+gdrive st
 ```
 
 Examples:
@@ -90,17 +89,17 @@ python main.py 1 reg ~/Documents "Documents"
 python main.py 2 reg ~/Pictures "Pictures"
 python main.py -v
 python main.py 1 ls
-python main.py 1 run
-python main.py 1 run 1
-python main.py 1 ti
+python main.py run
+python main.py ti
 ```
 
 Notes:
-- Each preset is an independent Google account setup with its own OAuth token, backup root, registrations, and timer.
+- Each preset is an independent Google account setup with its own OAuth token, backup root, and registrations.
 - `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
-- Normal app runs only use account-keyed tokens. Legacy token names are not read implicitly.
+- Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
+- `run` is global. It syncs every registration across every configured preset.
 - `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
 - `-v` prints the installed app version from the app's single release version source.
 - The local folder is authoritative. If you remove a local file, the matching Drive file is removed on the next sync.
@@ -109,11 +108,11 @@ Notes:
 
 ## Timer
 
-`ti` writes preset-specific user service files to `~/.config/systemd/user/` and enables an hourly timer.
+`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets.
 
 ```bash
-python main.py 1 ti
-systemctl --user list-timers gdrive-1.timer
+python main.py ti
+systemctl --user list-timers gdrive.timer
 ```
 
 ## Manual test checklist

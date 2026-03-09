@@ -17,18 +17,19 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
   - `auth` to authorize a Google account and create/update a preset
   - `reg` to register a local folder -> Drive path mapping
   - `ls` to list registrations
-  - `run` to sync all or one registration
+  - `run` to sync all registrations across all presets
   - `rm` to remove a registration
   - `ti`, `td`, `st` for timer install/disable/status
 - `auth <client_secret_path>` is the only no-preset account bootstrap command.
-- Account-scoped commands must use `gdrive <preset> <command> ...`.
+- `reg`, `ls`, and `rm` are preset-scoped: `gdrive <preset> <command> ...`.
+- `run`, `ti`, `td`, and `st` are global and must not take a preset.
 - Output should stay plain-text and deterministic.
 
 ## Architecture expectations
 - Keep CLI parsing separate from Drive API calls and sync planning.
 - Keep config under XDG config paths and sync state under XDG data paths.
-- Keep OAuth tokens and sync snapshots per preset so multiple Google accounts do not collide.
-- Token filenames should be keyed by a stable internal account key, not the preset number.
+- Keep OAuth tokens account-scoped and sync snapshots per preset so multiple Google accounts do not collide.
+- Token filenames should use the authorized account email, not the preset number.
 - Do not add legacy-token fallback branches to normal runtime code.
 - Persist remote ids per tracked path so future syncs can delete/update the correct Drive items.
 - Prefer small testable helpers for path normalization, state reconciliation, and rename detection.
@@ -44,6 +45,6 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 ## Done when
 - A user can authenticate with a Google desktop OAuth client.
 - A user can register one or more local folders with Drive target paths under a numeric preset.
-- `run` makes Drive match local content, including local deletes.
+- `run` makes Drive match local content across every configured preset, including local deletes.
 - Content-preserving local file renames are propagated as Drive moves/renames when detectable; otherwise the end state must still match local.
-- `ti` installs an hourly user timer for that preset that runs the same sync command.
+- `ti` installs one hourly user timer that runs the same global sync command.
