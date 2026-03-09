@@ -32,6 +32,10 @@ def token_file_for_preset(preset: str) -> Path:
     return token_dir() / f"{preset}.json"
 
 
+def token_file_for_account_key(account_key: str) -> Path:
+    return token_dir() / f"{account_key}.json"
+
+
 def state_dir() -> Path:
     return data_home() / "state"
 

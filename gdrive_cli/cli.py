@@ -26,6 +26,7 @@ from .config import (
     require_client_secret,
     set_backup_root_name,
     set_client_secret,
+    upsert_authenticated_account,
     update_registration,
 )
 from .errors import CliError
@@ -35,6 +36,7 @@ from .sync import delete_state, sync_registration
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
 COMMAND_HELP = {
+    "auth": "authorize a Google account and create/update a preset",
     "reg": "register folder sync",
     "ls": "list registrations",
     "run": "run sync",
@@ -56,6 +58,7 @@ def compact_usage() -> str:
         [
             "usage: gdrive -v",
             "       gdrive -u",
+            "       gdrive auth <client_secret_path>",
             "       gdrive <preset> reg <local_dir> <drive_path>",
             "       gdrive <preset> ls",
             "       gdrive <preset> run [edit_id]",
@@ -74,6 +77,7 @@ def print_help_text() -> None:
         "Google Drive backup CLI",
         "",
         "commands:",
+        "  auth create or update a preset via OAuth",
         "  reg  register folder sync",
         "  ls   list registrations",
         "  run  run sync",
@@ -179,9 +183,26 @@ def drive_client(preset: str):
     from .drive_api import DriveClient
 
     account = get_account(load_config(), preset)
-    secret = require_client_secret(account)
-    creds = load_credentials(preset, secret)
+    require_client_secret(account)
+    creds = load_credentials(account)
     return DriveClient(creds)
+
+
+def auth_account(client_secret_path: str) -> int:
+    from .auth import authorize_account
+
+    client_secret = Path(client_secret_path).expanduser()
+    if not client_secret.exists() or not client_secret.is_file():
+        raise CliError(f"missing client secret file: {client_secret}")
+    backup_root_name = ""
+    while not backup_root_name:
+        backup_root_name = input("Drive backup root dir name: ").strip()
+        if not backup_root_name:
+            print("enter a folder name like `Backups` or `ComputerBackups`", file=sys.stderr)
+    _, email, _ = authorize_account(client_secret)
+    account = upsert_authenticated_account(client_secret, email, backup_root_name)
+    print(f"authorized\t{account.preset}\t{email}\t{account.backup_root_name}")
+    return 0
 
 
 def upgrade_app() -> int:
@@ -323,6 +344,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.upgrade:
             return upgrade_app()
+        if args.preset == "auth":
+            if args.command is None or args.params:
+                raise CliError("usage: gdrive auth <client_secret_path>")
+            return auth_account(args.command)
         preset, params = parse_command(args.preset, args.command, args.params)
         if args.command == "reg":
             if len(params) != 2:

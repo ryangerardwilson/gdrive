@@ -34,11 +34,19 @@ The first interactive command asks for:
 
 The first authenticated sync opens a browser and stores the refresh token locally.
 
+Recommended setup:
+
+```bash
+python main.py auth /path/to/client_secret.json
+python main.py 1 reg ~/Documents "Documents"
+python main.py 1 run
+```
+
 ## Storage
 
 - Config: `~/.config/gdrive/config.json`
 - Data: `~/.local/share/gdrive/`
-- OAuth token: `~/.local/share/gdrive/tokens/<preset>.json`
+- OAuth token: `~/.local/share/gdrive/tokens/<account_key>.json`
 - Per-registration sync state: `~/.local/share/gdrive/state/<preset>-<id>.json`
 
 Example config:
@@ -48,6 +56,8 @@ Example config:
   "accounts": {
     "1": {
       "client_secret_file": "/home/ryan/.config/gdrive/client_secret.json",
+      "account_key": "a1b2c3d4e5f6a7b8",
+      "email": "you@example.com",
       "backup_root_name": "Backups",
       "registrations": []
     }
@@ -62,6 +72,7 @@ gdrive
 gdrive -h
 gdrive -v
 gdrive -u
+gdrive auth <client_secret_path>
 gdrive <preset> reg <local_dir> <drive_path>
 gdrive <preset> ls
 gdrive <preset> run
@@ -75,6 +86,7 @@ gdrive <preset> st
 Examples:
 
 ```bash
+python main.py auth ~/Documents/credentials/client_secret.json
 python main.py 1 reg ~/Documents "Documents"
 python main.py 2 reg ~/Pictures "Pictures"
 python main.py -v
@@ -86,6 +98,7 @@ python main.py 1 ti
 
 Notes:
 - Each preset is an independent Google account setup with its own OAuth token, backup root, registrations, and timer.
+- `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
 - `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
