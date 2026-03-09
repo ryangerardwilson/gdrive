@@ -20,8 +20,11 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(code, 0)
         output = stdout.getvalue()
         self.assertIn("Google Drive backup CLI", output)
-        self.assertIn("register a local folder to sync into a Drive path", output)
+        self.assertIn("features:", output)
+        self.assertIn("register folders to sync into Drive, then inspect or remove registrations", output)
+        self.assertIn("# <preset> reg <local_dir> <drive_path> and <preset> ls|rm <edit_id>", output)
         self.assertIn("gdrive 1 reg ~/Documents Documents", output)
+        self.assertNotIn("commands:", output)
         self.assertNotIn("usage:", output)
 
     def test_ensure_backup_root_name_prompts_and_saves_for_preset(self):
