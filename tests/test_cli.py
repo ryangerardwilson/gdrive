@@ -1,24 +1,28 @@
 import unittest
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from gdrive_cli.cli import (
     _build_runtime_command,
-    compact_usage,
     ensure_backup_root_name,
     ensure_client_secret,
+    main,
     write_timer_units,
 )
 
 
 class CliUsageTests(unittest.TestCase):
-    def test_compact_usage_contains_global_and_preset_commands(self):
-        usage = compact_usage()
-        self.assertIn("gdrive <preset> reg <local_dir> <drive_path>", usage)
-        self.assertIn("gdrive <preset> ls", usage)
-        self.assertIn("gdrive run", usage)
-        self.assertIn("gdrive ti", usage)
+    def test_help_is_human_friendly(self):
+        with patch("sys.stdout", new=StringIO()) as stdout:
+            code = main(["-h"])
+        self.assertEqual(code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Google Drive backup CLI", output)
+        self.assertIn("register a local folder to sync into a Drive path", output)
+        self.assertIn("gdrive 1 reg ~/Documents Documents", output)
+        self.assertNotIn("usage:", output)
 
     def test_ensure_backup_root_name_prompts_and_saves_for_preset(self):
         with TemporaryDirectory() as tmp:
