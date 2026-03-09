@@ -42,27 +42,36 @@ class SyncSummary:
     deleted: int = 0
 
 
-def state_file(reg_id: str) -> Path:
+def legacy_state_file(reg_id: str) -> Path:
     ensure_dirs()
     return state_dir() / f"{reg_id}.json"
 
 
-def load_state(reg_id: str) -> dict[str, StateEntry]:
-    path = state_file(reg_id)
+def state_file(preset: str, reg_id: str) -> Path:
+    ensure_dirs()
+    path = state_dir() / f"{preset}-{reg_id}.json"
+    legacy = legacy_state_file(reg_id)
+    if preset == "1" and not path.exists() and legacy.exists():
+        legacy.rename(path)
+    return path
+
+
+def load_state(preset: str, reg_id: str) -> dict[str, StateEntry]:
+    path = state_file(preset, reg_id)
     if not path.exists():
         return {}
     payload = json.loads(path.read_text())
     return {item["relpath"]: StateEntry(**item) for item in payload.get("entries", [])}
 
 
-def save_state(reg_id: str, entries: dict[str, StateEntry]) -> None:
-    path = state_file(reg_id)
+def save_state(preset: str, reg_id: str, entries: dict[str, StateEntry]) -> None:
+    path = state_file(preset, reg_id)
     payload = {"entries": [asdict(entries[key]) for key in sorted(entries)]}
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def delete_state(reg_id: str) -> None:
-    path = state_file(reg_id)
+def delete_state(preset: str, reg_id: str) -> None:
+    path = state_file(preset, reg_id)
     if path.exists():
         path.unlink()
 
@@ -136,11 +145,11 @@ def sort_paths_deep(paths: list[str], reverse: bool = False) -> list[str]:
     return sorted(paths, key=lambda item: (item.count("/"), item), reverse=reverse)
 
 
-def sync_registration(registration, drive: DriveClient, backup_root_name: str) -> SyncSummary:
+def sync_registration(preset: str, registration, drive: DriveClient, backup_root_name: str) -> SyncSummary:
     local_root = Path(registration.local_dir)
     if not local_root.exists() or not local_root.is_dir():
         raise CliError(f"missing local dir: {local_root}")
-    previous = load_state(registration.id)
+    previous = load_state(preset, registration.id)
     local_entries = scan_local_tree(local_root, previous)
     remote_root_id = registration.remote_root_id or drive.ensure_drive_path(
         f"{backup_root_name}/{registration.drive_path}"
@@ -273,5 +282,5 @@ def sync_registration(registration, drive: DriveClient, backup_root_name: str) -
         drive.delete_entry(previous[relpath].drive_id)
         summary.deleted += 1
 
-    save_state(registration.id, current_state)
+    save_state(preset, registration.id, current_state)
     return summary

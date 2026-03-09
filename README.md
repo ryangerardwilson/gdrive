@@ -29,8 +29,8 @@ python main.py -h
 5. Create an `OAuth client ID` with application type `Desktop app`.
 6. Download the client JSON.
 The first interactive command asks for:
-- the client secret JSON path
-- the Google Drive folder name that should hold all managed backups
+- the preset-specific client secret JSON path
+- the preset-specific Google Drive folder name that should hold all managed backups
 
 The first authenticated sync opens a browser and stores the refresh token locally.
 
@@ -38,16 +38,20 @@ The first authenticated sync opens a browser and stores the refresh token locall
 
 - Config: `~/.config/gdrive/config.json`
 - Data: `~/.local/share/gdrive/`
-- OAuth token: `~/.local/share/gdrive/token.json`
-- Per-registration sync state: `~/.local/share/gdrive/state/<id>.json`
+- OAuth token: `~/.local/share/gdrive/tokens/<preset>.json`
+- Per-registration sync state: `~/.local/share/gdrive/state/<preset>-<id>.json`
 
 Example config:
 
 ```json
 {
-  "client_secret_file": "/home/ryan/.config/gdrive/client_secret.json",
-  "backup_root_name": "Backups",
-  "registrations": []
+  "accounts": {
+    "1": {
+      "client_secret_file": "/home/ryan/.config/gdrive/client_secret.json",
+      "backup_root_name": "Backups",
+      "registrations": []
+    }
+  }
 }
 ```
 
@@ -58,31 +62,32 @@ gdrive
 gdrive -h
 gdrive -v
 gdrive -u
-gdrive reg <local_dir> <drive_path>
-gdrive ls
-gdrive run
-gdrive run <id>
-gdrive rm <id>
-gdrive ti
-gdrive td
-gdrive st
+gdrive <preset> reg <local_dir> <drive_path>
+gdrive <preset> ls
+gdrive <preset> run
+gdrive <preset> run <edit_id>
+gdrive <preset> rm <edit_id>
+gdrive <preset> ti
+gdrive <preset> td
+gdrive <preset> st
 ```
 
 Examples:
 
 ```bash
-python main.py reg ~/Documents "Documents"
-python main.py reg ~/Pictures "Pictures"
+python main.py 1 reg ~/Documents "Documents"
+python main.py 2 reg ~/Pictures "Pictures"
 python main.py -v
-python main.py ls
-python main.py run
-python main.py run 1
-python main.py ti
+python main.py 1 ls
+python main.py 1 run
+python main.py 1 run 1
+python main.py 1 ti
 ```
 
 Notes:
-- `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups.
-- `drive_path` is always relative to that backup root. Do not include the root itself in `reg`.
+- Each preset is an independent Google account setup with its own OAuth token, backup root, registrations, and timer.
+- `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
+- `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
 - `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
 - `-v` prints the installed app version from the app's single release version source.
 - The local folder is authoritative. If you remove a local file, the matching Drive file is removed on the next sync.
@@ -91,11 +96,11 @@ Notes:
 
 ## Timer
 
-`ti` writes user service files to `~/.config/systemd/user/` and enables an hourly timer.
+`ti` writes preset-specific user service files to `~/.config/systemd/user/` and enables an hourly timer.
 
 ```bash
-python main.py ti
-systemctl --user list-timers gdrive.timer
+python main.py 1 ti
+systemctl --user list-timers gdrive-1.timer
 ```
 
 ## Manual test checklist

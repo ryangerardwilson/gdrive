@@ -20,8 +20,16 @@ def config_file() -> Path:
     return config_home() / "config.json"
 
 
-def token_file() -> Path:
+def legacy_token_file() -> Path:
     return data_home() / "token.json"
+
+
+def token_dir() -> Path:
+    return data_home() / "tokens"
+
+
+def token_file_for_preset(preset: str) -> Path:
+    return token_dir() / f"{preset}.json"
 
 
 def state_dir() -> Path:
@@ -31,4 +39,5 @@ def state_dir() -> Path:
 def ensure_dirs() -> None:
     config_home().mkdir(parents=True, exist_ok=True, mode=0o700)
     data_home().mkdir(parents=True, exist_ok=True, mode=0o700)
+    token_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
     state_dir().mkdir(parents=True, exist_ok=True, mode=0o700)

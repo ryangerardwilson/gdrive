@@ -6,13 +6,13 @@ from gdrive_cli.cli import compact_usage, ensure_backup_root_name, ensure_client
 
 
 class CliUsageTests(unittest.TestCase):
-    def test_compact_usage_contains_core_commands(self):
+    def test_compact_usage_contains_preset_commands(self):
         usage = compact_usage()
-        self.assertIn("gdrive reg <local_dir> <drive_path>", usage)
-        self.assertIn("gdrive run [id]", usage)
-        self.assertNotIn("gdrive a <client_secret_file>", usage)
+        self.assertIn("gdrive <preset> reg <local_dir> <drive_path>", usage)
+        self.assertIn("gdrive <preset> run [edit_id]", usage)
+        self.assertIn("gdrive <preset> ls", usage)
 
-    def test_ensure_backup_root_name_prompts_and_saves(self):
+    def test_ensure_backup_root_name_prompts_and_saves_for_preset(self):
         with TemporaryDirectory() as tmp:
             with patch.dict(
                 "os.environ",
@@ -24,9 +24,9 @@ class CliUsageTests(unittest.TestCase):
             ):
                 with patch("sys.stdin.isatty", return_value=True):
                     with patch("builtins.input", return_value="Backups"):
-                        self.assertEqual(ensure_backup_root_name(interactive=True), "Backups")
+                        self.assertEqual(ensure_backup_root_name("2", interactive=True), "Backups")
 
-    def test_ensure_client_secret_prompts_and_saves(self):
+    def test_ensure_client_secret_prompts_and_saves_for_preset(self):
         with TemporaryDirectory() as tmp:
             with patch.dict(
                 "os.environ",
@@ -41,8 +41,4 @@ class CliUsageTests(unittest.TestCase):
                     handle.write("{}")
                 with patch("sys.stdin.isatty", return_value=True):
                     with patch("builtins.input", return_value=secret_path):
-                        self.assertEqual(str(ensure_client_secret(interactive=True)), secret_path)
-
-    def test_compact_usage_has_ls(self):
-        usage = compact_usage()
-        self.assertIn("gdrive ls", usage)
+                        self.assertEqual(str(ensure_client_secret("2", interactive=True)), secret_path)

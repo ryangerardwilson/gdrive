@@ -16,6 +16,8 @@ except Exception:  # pragma: no cover - optional during source-only edge cases
 from . import __version__
 from .config import (
     add_registration,
+    ensure_account,
+    get_account,
     get_registration,
     list_registrations,
     load_config,
@@ -32,6 +34,15 @@ from .sync import delete_state, sync_registration
 
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
+COMMAND_HELP = {
+    "reg": "register folder sync",
+    "ls": "list registrations",
+    "run": "run sync",
+    "rm": "remove registration",
+    "ti": "install hourly timer",
+    "td": "disable timer",
+    "st": "timer status",
+}
 
 
 def _muted_text(text: str) -> str:
@@ -40,157 +51,136 @@ def _muted_text(text: str) -> str:
     return f"{ANSI_GRAY}{text}{ANSI_RESET}"
 
 
-class GrayHelpArgumentParser(argparse.ArgumentParser):
-    def print_help(self, file=None) -> None:
-        stream = file or sys.stdout
-        text = self.format_help()
-        if stream is sys.stdout:
-            stream.write(_muted_text(text))
-            if not text.endswith("\n"):
-                stream.write("\n")
-            return
-        stream.write(text)
-        if not text.endswith("\n"):
-            stream.write("\n")
-
-
 def compact_usage() -> str:
     return "\n".join(
         [
             "usage: gdrive -v",
             "       gdrive -u",
-            "usage: gdrive reg <local_dir> <drive_path>",
-            "       gdrive ls",
-            "       gdrive run [id]",
-            "       gdrive rm <id>",
-            "       gdrive ti",
-            "       gdrive td",
-            "       gdrive st",
+            "       gdrive <preset> reg <local_dir> <drive_path>",
+            "       gdrive <preset> ls",
+            "       gdrive <preset> run [edit_id]",
+            "       gdrive <preset> rm <edit_id>",
+            "       gdrive <preset> ti",
+            "       gdrive <preset> td",
+            "       gdrive <preset> st",
         ]
     )
 
 
-def prompt_client_secret_file() -> Path:
+def print_help_text() -> None:
+    lines = [
+        compact_usage(),
+        "",
+        "Google Drive backup CLI",
+        "",
+        "commands:",
+        "  reg  register folder sync",
+        "  ls   list registrations",
+        "  run  run sync",
+        "  rm   remove registration",
+        "  ti   install hourly timer",
+        "  td   disable timer",
+        "  st   timer status",
+        "",
+        "options:",
+        "  -h   show help and exit",
+        "  -v   print version",
+        "  -u   upgrade to latest release",
+    ]
+    print(_muted_text("\n".join(lines)))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="gdrive", add_help=False)
+    parser.add_argument("-h", action="store_true", dest="help")
+    parser.add_argument("-v", action="store_true", dest="version")
+    parser.add_argument("-u", action="store_true", dest="upgrade")
+    parser.add_argument("preset", nargs="?")
+    parser.add_argument("command", nargs="?")
+    parser.add_argument("params", nargs=argparse.REMAINDER)
+    return parser
+
+
+def prompt_client_secret_file(preset: str) -> Path:
     while True:
-        value = input("Google client secret file path: ").strip()
+        value = input(f"Preset {preset} Google client secret file path: ").strip()
         if not value:
             print("enter a path to a Google desktop OAuth client JSON file", file=sys.stderr)
             continue
         try:
-            return set_client_secret(value)
+            return set_client_secret(preset, value)
         except CliError as exc:
             print(str(exc), file=sys.stderr)
 
 
-def ensure_client_secret(interactive: bool) -> Path:
+def ensure_client_secret(preset: str, interactive: bool) -> Path:
     config = load_config()
-    if config.client_secret_file:
-        return require_client_secret(config)
+    account = ensure_account(config, preset)
+    if account.client_secret_file:
+        return require_client_secret(account)
     if not interactive or not sys.stdin.isatty():
-        raise CliError("missing client secret in config: run `gdrive` interactively first")
-    return prompt_client_secret_file()
+        raise CliError(f"missing client secret in config for preset `{preset}`: run `gdrive {preset} ls` interactively first")
+    return prompt_client_secret_file(preset)
 
 
-def prompt_backup_root_name() -> str:
+def prompt_backup_root_name(preset: str) -> str:
     while True:
-        value = input("Drive backup root dir name: ").strip()
+        value = input(f"Preset {preset} Drive backup root dir name: ").strip()
         if value:
-            return set_backup_root_name(value)
+            return set_backup_root_name(preset, value)
         print("enter a folder name like `Backups` or `ComputerBackups`", file=sys.stderr)
 
 
-def ensure_backup_root_name(interactive: bool) -> str:
+def ensure_backup_root_name(preset: str, interactive: bool) -> str:
     config = load_config()
-    if config.backup_root_name:
-        return config.backup_root_name
+    account = ensure_account(config, preset)
+    if account.backup_root_name:
+        return require_backup_root_name(account)
     if not interactive or not sys.stdin.isatty():
-        raise CliError("missing backup root in config: run `gdrive` interactively first")
-    return prompt_backup_root_name()
+        raise CliError(f"missing backup root in config for preset `{preset}`: run `gdrive {preset} ls` interactively first")
+    return prompt_backup_root_name(preset)
 
 
-def ensure_setup(interactive: bool) -> tuple[Path, str]:
-    client_secret = ensure_client_secret(interactive=interactive)
-    backup_root_name = ensure_backup_root_name(interactive=interactive)
+def ensure_setup(preset: str, interactive: bool) -> tuple[Path, str]:
+    client_secret = ensure_client_secret(preset, interactive=interactive)
+    backup_root_name = ensure_backup_root_name(preset, interactive=interactive)
     return client_secret, backup_root_name
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = GrayHelpArgumentParser(
-        prog="gdrive",
-        description="Google Drive backup CLI",
-        add_help=False,
-    )
-    parser.add_argument("-h", action="help", help="show help and exit")
-    parser.add_argument("-v", action="store_true", dest="version", help="print version")
-    parser.add_argument("-u", action="store_true", dest="upgrade", help="upgrade to latest release")
-    subs = parser.add_subparsers(dest="command", parser_class=GrayHelpArgumentParser)
-
-    reg_p = subs.add_parser("reg", help="register folder sync", add_help=False)
-    reg_p.add_argument("-h", action="help", help="show help and exit")
-    reg_p.add_argument("local_dir")
-    reg_p.add_argument("drive_path")
-
-    ls_p = subs.add_parser("ls", help="list registrations", add_help=False)
-    ls_p.add_argument("-h", action="help", help="show help and exit")
-
-    run_p = subs.add_parser("run", help="run sync", add_help=False)
-    run_p.add_argument("-h", action="help", help="show help and exit")
-    run_p.add_argument("id", nargs="?")
-
-    rm_p = subs.add_parser("rm", help="remove registration", add_help=False)
-    rm_p.add_argument("-h", action="help", help="show help and exit")
-    rm_p.add_argument("id")
-
-    ti_p = subs.add_parser("ti", help="install hourly timer", add_help=False)
-    ti_p.add_argument("-h", action="help", help="show help and exit")
-    td_p = subs.add_parser("td", help="disable timer", add_help=False)
-    td_p.add_argument("-h", action="help", help="show help and exit")
-    st_p = subs.add_parser("st", help="timer status", add_help=False)
-    st_p.add_argument("-h", action="help", help="show help and exit")
-    return parser
-
-
-def print_registrations() -> int:
-    config = load_config()
-    root_name = require_backup_root_name(config)
-    regs = config.registrations
+def print_registrations(preset: str) -> int:
+    account = get_account(load_config(), preset)
+    root_name = require_backup_root_name(account)
+    regs = account.registrations
     if not regs:
         print("no registrations")
         return 0
     use_color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
-    label_width = len("edit_id") + 1
+    label_width = len("edit_id")
     sections: list[str] = []
     for index, reg in enumerate(regs, start=1):
         url = f"https://drive.google.com/drive/folders/{reg.remote_root_id}" if reg.remote_root_id else "-"
         prefix = f"[{index}]"
         header = prefix + ("-" * max(1, 79 - len(prefix)))
         body_lines = [
-            f"{'edit_id':<{label_width}}: {reg.id}",
-            f"{'local':<{label_width}}: {reg.local_dir}",
-            f"{'drive':<{label_width}}: {root_name}/{reg.drive_path}",
+            f"{'edit_id':<{label_width}} : {reg.id}",
+            f"{'local':<{label_width}}   : {reg.local_dir}",
+            f"{'drive':<{label_width}}   : {root_name}/{reg.drive_path}",
             url,
         ]
         if use_color:
             body_lines = [f"{ANSI_GRAY}{line}{ANSI_RESET}" for line in body_lines]
-        sections.append(
-            "\n".join(
-                [
-                    header,
-                    *body_lines,
-                ]
-            )
-        )
+        sections.append("\n".join([header, *body_lines]))
     print("\n".join(sections))
     return 0
 
 
-def drive_client() -> DriveClient:
+def drive_client(preset: str):
     from .auth import load_credentials
     from .drive_api import DriveClient
 
-    config = load_config()
-    secret = require_client_secret(config)
-    creds = load_credentials(secret)
+    account = get_account(load_config(), preset)
+    secret = require_client_secret(account)
+    creds = load_credentials(preset, secret)
     return DriveClient(creds)
 
 
@@ -203,42 +193,45 @@ def upgrade_app() -> int:
         script_path = Path(handle.name)
     try:
         script_path.chmod(0o700)
-        env = os.environ.copy()
         result = subprocess.run(
             ["/usr/bin/env", "bash", str(script_path), "-u"],
             check=False,
             text=True,
-            env=env,
+            env=os.environ.copy(),
         )
         return result.returncode
     finally:
         script_path.unlink(missing_ok=True)
 
 
-def write_timer_units() -> None:
+def unit_name(preset: str) -> str:
+    return f"gdrive-{preset}"
+
+
+def write_timer_units(preset: str) -> None:
     ensure_dirs()
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
     systemd_dir.mkdir(parents=True, exist_ok=True)
-    service_path = systemd_dir / "gdrive.service"
-    timer_path = systemd_dir / "gdrive.timer"
+    service_path = systemd_dir / f"{unit_name(preset)}.service"
+    timer_path = systemd_dir / f"{unit_name(preset)}.timer"
     entrypoint = Path(__file__).resolve().parents[1] / "main.py"
     python_bin = Path(sys.executable).resolve()
     service_body = "\n".join(
         [
             "[Unit]",
-            "Description=gdrive sync",
+            f"Description=gdrive sync preset {preset}",
             "",
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={entrypoint.parent}",
-            f"ExecStart={python_bin} {entrypoint} run",
+            f"ExecStart={python_bin} {entrypoint} {preset} run",
             "",
         ]
     )
     timer_body = "\n".join(
         [
             "[Unit]",
-            "Description=Run gdrive hourly",
+            f"Description=Run gdrive preset {preset} hourly",
             "",
             "[Timer]",
             "OnBootSec=5m",
@@ -250,8 +243,8 @@ def write_timer_units() -> None:
             "",
         ]
     )
-    service_path.write_text(service_body)
-    timer_path.write_text(timer_body)
+    service_path.write_text(service_body, encoding="utf-8")
+    timer_path.write_text(timer_body, encoding="utf-8")
 
 
 def systemctl_user(*args: str) -> subprocess.CompletedProcess[str]:
@@ -263,84 +256,114 @@ def systemctl_user(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def install_timer() -> int:
-    write_timer_units()
+def install_timer(preset: str) -> int:
+    write_timer_units(preset)
     systemctl_user("daemon-reload")
-    systemctl_user("enable", "--now", "gdrive.timer")
-    print("timer enabled: gdrive.timer")
+    systemctl_user("enable", "--now", f"{unit_name(preset)}.timer")
+    print(f"timer enabled: {unit_name(preset)}.timer")
     return 0
 
 
-def disable_timer() -> int:
-    write_timer_units()
-    systemctl_user("disable", "--now", "gdrive.timer")
-    print("timer disabled: gdrive.timer")
+def disable_timer(preset: str) -> int:
+    write_timer_units(preset)
+    systemctl_user("disable", "--now", f"{unit_name(preset)}.timer")
+    print(f"timer disabled: {unit_name(preset)}.timer")
     return 0
 
 
-def timer_status() -> int:
-    result = systemctl_user("status", "gdrive.timer")
+def timer_status(preset: str) -> int:
+    result = systemctl_user("status", f"{unit_name(preset)}.timer")
     print(result.stdout.strip())
     return 0
 
 
-def run_sync(target_id: str | None) -> int:
-    config = load_config()
-    backup_root_name = require_backup_root_name(config)
-    regs = config.registrations
+def run_sync(preset: str, target_id: str | None) -> int:
+    account = get_account(load_config(), preset)
+    backup_root_name = require_backup_root_name(account)
+    regs = account.registrations
     if target_id:
-        regs = [get_registration(target_id)]
+        regs = [get_registration(preset, target_id)]
     if not regs:
         raise CliError("no registrations")
-    client = drive_client()
+    client = drive_client(preset)
     for reg in regs:
-        summary = sync_registration(reg, client, backup_root_name)
-        update_registration(reg)
+        summary = sync_registration(preset, reg, client, backup_root_name)
+        update_registration(preset, reg)
         print(
             f"{reg.id}\tcreated={summary.created}\tupdated={summary.updated}\tmoved={summary.moved}\tdeleted={summary.deleted}"
         )
     return 0
 
 
+def parse_command(preset: str | None, command: str | None, params: list[str]) -> tuple[str, list[str]]:
+    if not preset:
+        raise CliError("missing preset: use `gdrive <preset> <command>`")
+    if not str(preset).isdigit():
+        raise CliError("preset must be numeric, like `1` or `2`")
+    if not command:
+        raise CliError("missing command")
+    if command not in COMMAND_HELP:
+        raise CliError(f"unknown command `{command}`")
+    return str(preset), list(params)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     if not argv:
-        parser.print_help()
+        print_help_text()
         return 0
     args = parser.parse_args(argv)
+    if args.help:
+        print_help_text()
+        return 0
     try:
         if args.version:
             print(__version__)
             return 0
         if args.upgrade:
             return upgrade_app()
+        preset, params = parse_command(args.preset, args.command, args.params)
         if args.command == "reg":
-            ensure_setup(interactive=True)
-            reg = add_registration(args.local_dir, args.drive_path)
-            print(f"registered\t{reg.id}\t{reg.local_dir}\t{reg.drive_path}")
+            if len(params) != 2:
+                raise CliError("usage: gdrive <preset> reg <local_dir> <drive_path>")
+            ensure_setup(preset, interactive=True)
+            reg = add_registration(preset, params[0], params[1])
+            print(f"registered\t{preset}\t{reg.id}\t{reg.local_dir}\t{reg.drive_path}")
             return 0
         if args.command == "ls":
-            ensure_setup(interactive=True)
-            return print_registrations()
+            if params:
+                raise CliError("usage: gdrive <preset> ls")
+            ensure_setup(preset, interactive=True)
+            return print_registrations(preset)
         if args.command == "run":
-            ensure_setup(interactive=False)
-            return run_sync(args.id)
+            if len(params) > 1:
+                raise CliError("usage: gdrive <preset> run [edit_id]")
+            ensure_setup(preset, interactive=False)
+            return run_sync(preset, params[0] if params else None)
         if args.command == "rm":
-            ensure_setup(interactive=True)
-            reg = remove_registration(args.id)
-            delete_state(reg.id)
-            print(f"removed\t{reg.id}\t{reg.local_dir}")
+            if len(params) != 1:
+                raise CliError("usage: gdrive <preset> rm <edit_id>")
+            ensure_setup(preset, interactive=True)
+            reg = remove_registration(preset, params[0])
+            delete_state(preset, reg.id)
+            print(f"removed\t{preset}\t{reg.id}\t{reg.local_dir}")
             return 0
         if args.command == "ti":
-            ensure_setup(interactive=True)
-            return install_timer()
+            if params:
+                raise CliError("usage: gdrive <preset> ti")
+            ensure_setup(preset, interactive=True)
+            return install_timer(preset)
         if args.command == "td":
-            ensure_setup(interactive=True)
-            return disable_timer()
+            if params:
+                raise CliError("usage: gdrive <preset> td")
+            ensure_setup(preset, interactive=True)
+            return disable_timer(preset)
         if args.command == "st":
-            ensure_setup(interactive=True)
-            return timer_status()
+            if params:
+                raise CliError("usage: gdrive <preset> st")
+            ensure_setup(preset, interactive=True)
+            return timer_status(preset)
         print(compact_usage())
         return 1
     except CliError as exc:

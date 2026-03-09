@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .errors import CliError
 from .paths import config_file, ensure_dirs
@@ -18,140 +20,274 @@ class Registration:
 
 
 @dataclass(slots=True)
-class AppConfig:
-    client_secret_file: str | None = None
+class AccountConfig:
+    preset: str
+    client_secret_file: Path | None = None
     backup_root_name: str | None = None
     registrations: list[Registration] = field(default_factory=list)
 
 
-def load_config() -> AppConfig:
-    ensure_dirs()
-    path = config_file()
-    if not path.exists():
-        return AppConfig()
-    data = json.loads(path.read_text())
-    regs = [Registration(**item) for item in data.get("registrations", [])]
-    return AppConfig(
-        client_secret_file=data.get("client_secret_file"),
-        backup_root_name=normalize_drive_path(data["backup_root_name"]) if data.get("backup_root_name") else None,
-        registrations=regs,
-    )
+@dataclass(slots=True)
+class AppConfig:
+    path: Path
+    accounts: dict[str, AccountConfig]
 
 
-def save_config(config: AppConfig) -> None:
-    ensure_dirs()
-    path = config_file()
-    payload = {
-        "client_secret_file": config.client_secret_file,
-        "backup_root_name": config.backup_root_name,
-        "registrations": [asdict(item) for item in config.registrations],
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+def _sorted_accounts(accounts: dict[str, AccountConfig]) -> dict[str, AccountConfig]:
+    return dict(sorted(accounts.items(), key=lambda item: (int(item[0]) if item[0].isdigit() else item[0])))
 
 
-def require_client_secret(config: AppConfig) -> Path:
-    if not config.client_secret_file:
-        raise CliError("missing client secret in config")
-    path = Path(config.client_secret_file).expanduser().resolve()
-    if not path.exists():
-        raise CliError(f"missing client secret file: {path}")
-    return path
+def resolve_config_path() -> Path:
+    override = os.environ.get("GDRIVE_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    return config_file()
 
 
-def set_client_secret(path_text: str) -> Path:
-    path = Path(path_text).expanduser().resolve()
-    if not path.exists():
-        raise CliError(f"missing client secret file: {path}")
-    config = load_config()
-    config.client_secret_file = str(path)
-    save_config(config)
-    return path
-
-
-def next_registration_id(config: AppConfig) -> str:
-    if not config.registrations:
-        return "1"
-    return str(max(int(item.id) for item in config.registrations) + 1)
+def _normalize_preset(preset: str) -> str:
+    value = str(preset).strip()
+    if not value or not value.isdigit():
+        raise CliError("preset must be numeric, like `1` or `2`")
+    return value
 
 
 def normalize_drive_path(value: str) -> str:
-    parts = [segment.strip() for segment in value.split("/") if segment.strip()]
+    parts = [segment.strip() for segment in str(value).strip().replace("\\", "/").split("/") if segment.strip()]
     if not parts:
-        raise CliError("invalid drive path: use `Folder/Subfolder`")
+        raise CliError("path cannot be empty")
     return "/".join(parts)
 
 
-def add_registration(local_dir: str, drive_path: str) -> Registration:
+def normalize_relative_drive_path(value: str, backup_root_name: str) -> str:
+    drive_path = normalize_drive_path(value)
+    root = normalize_drive_path(backup_root_name)
+    if drive_path == root or drive_path.startswith(f"{root}/"):
+        raise CliError(f"drive path must be relative to backup root `{root}`")
+    return drive_path
+
+
+def _registration_from_raw(raw: Any) -> Registration | None:
+    if not isinstance(raw, dict):
+        return None
+    reg_id = str(raw.get("id", "")).strip()
+    local_dir = str(raw.get("local_dir", "")).strip()
+    drive_path = str(raw.get("drive_path", "")).strip()
+    if not reg_id or not local_dir or not drive_path:
+        return None
+    return Registration(
+        id=reg_id,
+        local_dir=str(Path(local_dir).expanduser().resolve()),
+        drive_path=normalize_drive_path(drive_path),
+        remote_root_id=str(raw.get("remote_root_id")).strip() or None if raw.get("remote_root_id") is not None else None,
+        enabled=bool(raw.get("enabled", True)),
+    )
+
+
+def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
+    if raw is None:
+        return AccountConfig(preset=preset)
+    if not isinstance(raw, dict):
+        raise CliError(f"invalid config: accounts['{preset}'] must be an object")
+    client_secret_raw = raw.get("client_secret_file")
+    backup_root_raw = raw.get("backup_root_name")
+    registrations_raw = raw.get("registrations", [])
+    client_secret = None
+    if isinstance(client_secret_raw, str) and client_secret_raw.strip():
+        client_secret = Path(client_secret_raw).expanduser()
+    backup_root_name = None
+    if isinstance(backup_root_raw, str) and backup_root_raw.strip():
+        backup_root_name = normalize_drive_path(backup_root_raw)
+    registrations: list[Registration] = []
+    if registrations_raw is None:
+        registrations_raw = []
+    if not isinstance(registrations_raw, list):
+        raise CliError(f"invalid config: accounts['{preset}'].registrations must be a list")
+    for item in registrations_raw:
+        registration = _registration_from_raw(item)
+        if registration:
+            registrations.append(registration)
+    return AccountConfig(
+        preset=preset,
+        client_secret_file=client_secret,
+        backup_root_name=backup_root_name,
+        registrations=sorted(registrations, key=lambda reg: int(reg.id) if reg.id.isdigit() else reg.id),
+    )
+
+
+def _migrate_legacy_root(raw: dict[str, Any]) -> dict[str, Any]:
+    if "accounts" in raw and isinstance(raw.get("accounts"), dict):
+        return raw
+    return {
+        "accounts": {
+            "1": {
+                "client_secret_file": raw.get("client_secret_file"),
+                "backup_root_name": raw.get("backup_root_name"),
+                "registrations": raw.get("registrations", []),
+            }
+        }
+    }
+
+
+def load_config(path: Path | None = None) -> AppConfig:
+    config_path = (path or resolve_config_path()).expanduser()
+    ensure_dirs()
+    if not config_path.exists():
+        save_config(AppConfig(path=config_path, accounts={}))
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise CliError(f"invalid JSON in config {config_path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise CliError(f"invalid config at {config_path}: root must be an object")
+    raw = _migrate_legacy_root(raw)
+    accounts_raw = raw.get("accounts", {})
+    if not isinstance(accounts_raw, dict):
+        raise CliError(f"invalid config at {config_path}: 'accounts' must be an object")
+    accounts: dict[str, AccountConfig] = {}
+    for preset, account_raw in accounts_raw.items():
+        preset_key = _normalize_preset(str(preset))
+        accounts[preset_key] = _account_from_raw(preset_key, account_raw)
+    return AppConfig(path=config_path, accounts=_sorted_accounts(accounts))
+
+
+def _serialize_config(config: AppConfig) -> dict[str, Any]:
+    accounts_payload: dict[str, Any] = {}
+    for preset, account in _sorted_accounts(config.accounts).items():
+        accounts_payload[preset] = {
+            "client_secret_file": str(account.client_secret_file.expanduser()) if account.client_secret_file else "",
+            "backup_root_name": account.backup_root_name or "",
+            "registrations": [
+                {
+                    "id": registration.id,
+                    "local_dir": registration.local_dir,
+                    "drive_path": registration.drive_path,
+                    "remote_root_id": registration.remote_root_id,
+                    "enabled": registration.enabled,
+                }
+                for registration in sorted(
+                    account.registrations,
+                    key=lambda reg: int(reg.id) if reg.id.isdigit() else reg.id,
+                )
+            ],
+        }
+    return {"accounts": accounts_payload}
+
+
+def save_config(config: AppConfig) -> None:
+    config.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config.path.write_text(json.dumps(_serialize_config(config), indent=2) + "\n", encoding="utf-8")
+
+
+def ensure_account(config: AppConfig, preset: str) -> AccountConfig:
+    preset_key = _normalize_preset(preset)
+    account = config.accounts.get(preset_key)
+    if account is None:
+        account = AccountConfig(preset=preset_key)
+        config.accounts[preset_key] = account
+        config.accounts = _sorted_accounts(config.accounts)
+    return account
+
+
+def get_account(config: AppConfig, preset: str) -> AccountConfig:
+    preset_key = _normalize_preset(preset)
+    account = config.accounts.get(preset_key)
+    if account is None:
+        available = ", ".join(sorted(config.accounts)) or "none"
+        raise CliError(f"preset `{preset_key}` not found. available presets: {available}")
+    return account
+
+
+def require_client_secret(account: AccountConfig) -> Path:
+    if not account.client_secret_file:
+        raise CliError(f"preset `{account.preset}` is missing a client secret file")
+    return account.client_secret_file
+
+
+def require_backup_root_name(account: AccountConfig) -> str:
+    if not account.backup_root_name:
+        raise CliError(f"preset `{account.preset}` is missing a Drive backup root dir name")
+    return account.backup_root_name
+
+
+def set_client_secret(preset: str, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.exists():
+        raise CliError(f"missing client secret file: {path}")
+    if not path.is_file():
+        raise CliError(f"client secret path is not a file: {path}")
+    config = load_config()
+    account = ensure_account(config, preset)
+    account.client_secret_file = path.resolve()
+    save_config(config)
+    return account.client_secret_file
+
+
+def set_backup_root_name(preset: str, value: str) -> str:
+    normalized = normalize_drive_path(value)
+    config = load_config()
+    account = ensure_account(config, preset)
+    account.backup_root_name = normalized
+    save_config(config)
+    return normalized
+
+
+def list_registrations(preset: str) -> list[Registration]:
+    return list(get_account(load_config(), preset).registrations)
+
+
+def _next_registration_id(registrations: list[Registration]) -> str:
+    numeric_ids = [int(reg.id) for reg in registrations if reg.id.isdigit()]
+    return str(max(numeric_ids, default=0) + 1)
+
+
+def add_registration(preset: str, local_dir: str, drive_path: str) -> Registration:
+    config = load_config()
+    account = ensure_account(config, preset)
+    backup_root_name = require_backup_root_name(account)
     local_path = Path(local_dir).expanduser().resolve()
     if not local_path.exists() or not local_path.is_dir():
         raise CliError(f"missing local dir: {local_path}")
-    config = load_config()
-    backup_root_name = require_backup_root_name(config)
     normalized_drive_path = normalize_relative_drive_path(drive_path, backup_root_name)
-    for reg in config.registrations:
-        if Path(reg.local_dir) == local_path:
-            raise CliError(f"already registered: {reg.id}")
-    reg = Registration(
-        id=next_registration_id(config),
+    for registration in account.registrations:
+        if registration.local_dir == str(local_path):
+            raise CliError(f"local dir already registered as id {registration.id}")
+        if registration.drive_path == normalized_drive_path:
+            raise CliError(f"drive path already registered as id {registration.id}")
+    registration = Registration(
+        id=_next_registration_id(account.registrations),
         local_dir=str(local_path),
         drive_path=normalized_drive_path,
     )
-    config.registrations.append(reg)
+    account.registrations.append(registration)
+    account.registrations.sort(key=lambda reg: int(reg.id) if reg.id.isdigit() else reg.id)
     save_config(config)
-    return reg
+    return registration
 
 
-def require_backup_root_name(config: AppConfig) -> str:
-    if not config.backup_root_name:
-        raise CliError("missing backup root: run any interactive command and set it")
-    return config.backup_root_name
+def get_registration(preset: str, reg_id: str) -> Registration:
+    for registration in get_account(load_config(), preset).registrations:
+        if registration.id == reg_id:
+            return registration
+    raise CliError(f"registration `{reg_id}` not found in preset `{_normalize_preset(preset)}`")
 
 
-def set_backup_root_name(value: str) -> str:
-    normalized = normalize_drive_path(value)
+def update_registration(preset: str, updated: Registration) -> None:
     config = load_config()
-    config.backup_root_name = normalized
-    save_config(config)
-    return normalized
-
-
-def normalize_relative_drive_path(value: str, backup_root_name: str) -> str:
-    normalized = normalize_drive_path(value)
-    if normalized == backup_root_name or normalized.startswith(f"{backup_root_name}/"):
-        raise CliError("drive path must be relative to the backup root, not include it")
-    return normalized
-
-
-def list_registrations() -> list[Registration]:
-    return load_config().registrations
-
-
-def get_registration(reg_id: str) -> Registration:
-    config = load_config()
-    for reg in config.registrations:
-        if reg.id == reg_id:
-            return reg
-    raise CliError(f"unknown registration: {reg_id}")
-
-
-def update_registration(updated: Registration) -> None:
-    config = load_config()
-    replaced = False
-    for index, reg in enumerate(config.registrations):
-        if reg.id == updated.id:
-            config.registrations[index] = updated
-            replaced = True
-            break
-    if not replaced:
-        raise CliError(f"unknown registration: {updated.id}")
-    save_config(config)
-
-
-def remove_registration(reg_id: str) -> Registration:
-    config = load_config()
-    for index, reg in enumerate(config.registrations):
-        if reg.id == reg_id:
-            config.registrations.pop(index)
+    account = get_account(config, preset)
+    for index, registration in enumerate(account.registrations):
+        if registration.id == updated.id:
+            account.registrations[index] = updated
             save_config(config)
-            return reg
-    raise CliError(f"unknown registration: {reg_id}")
+            return
+    raise CliError(f"registration `{updated.id}` not found in preset `{account.preset}`")
+
+
+def remove_registration(preset: str, reg_id: str) -> Registration:
+    config = load_config()
+    account = get_account(config, preset)
+    for index, registration in enumerate(account.registrations):
+        if registration.id == reg_id:
+            removed = account.registrations.pop(index)
+            save_config(config)
+            return removed
+    raise CliError(f"registration `{reg_id}` not found in preset `{account.preset}`")
