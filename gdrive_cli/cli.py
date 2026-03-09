@@ -284,10 +284,10 @@ def run_sync(target_id: str | None) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv:
-        print(compact_usage())
-        return 0
     parser = build_parser()
+    if not argv:
+        parser.print_help()
+        return 0
     args = parser.parse_args(argv)
     try:
         if args.version:
