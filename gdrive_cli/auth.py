@@ -38,18 +38,31 @@ def authorize_account(client_secret_file: Path) -> tuple[Credentials, str, str]:
     return creds, email, account_key
 
 
+def migrate_legacy_token(account: AccountConfig) -> Path:
+    ensure_dirs()
+    if not account.account_key:
+        raise ApiError(f"preset {account.preset} is missing account_key; re-run `gdrive auth <client_secret_path>`")
+    target_path = token_file_for_account_key(account.account_key)
+    if target_path.exists():
+        return target_path
+    preset_token_path = token_file_for_preset(account.preset)
+    if preset_token_path.exists():
+        preset_token_path.rename(target_path)
+        return target_path
+    legacy_path = legacy_token_file()
+    if account.preset == "1" and legacy_path.exists():
+        legacy_path.rename(target_path)
+        return target_path
+    raise ApiError(f"no legacy token found for preset {account.preset}")
+
+
 def load_credentials(account: AccountConfig) -> Credentials:
     ensure_dirs()
-    token_path = token_file_for_account_key(account.account_key) if account.account_key else token_file_for_preset(account.preset)
-    preset_token_path = token_file_for_preset(account.preset)
-    legacy_path = legacy_token_file()
-    if account.account_key and not token_path.exists():
-        if preset_token_path.exists():
-            _write_token(token_path, Credentials.from_authorized_user_file(str(preset_token_path), SCOPES))
-        elif account.preset == "1" and legacy_path.exists():
-            token_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
-    elif not account.account_key and account.preset == "1" and not token_path.exists() and legacy_path.exists():
-        token_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
+    if not account.account_key:
+        raise ApiError(
+            f"preset {account.preset} is missing account_key; re-run `gdrive auth <client_secret_path>`"
+        )
+    token_path = token_file_for_account_key(account.account_key)
     creds: Credentials | None = None
     if token_path.exists():
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)

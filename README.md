@@ -99,6 +99,10 @@ python main.py 1 ti
 Notes:
 - Each preset is an independent Google account setup with its own OAuth token, backup root, registrations, and timer.
 - `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
+- Normal app runs only use account-keyed tokens. Legacy token names are not read implicitly.
+- If you need to rename old preset-based tokens once, use:
+  - `python scripts/migrate_legacy_tokens.py`
+  - or `python scripts/migrate_legacy_tokens.py <preset>`
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
 - `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
