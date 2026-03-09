@@ -30,6 +30,9 @@ from .errors import CliError
 from .paths import ensure_dirs
 from .sync import delete_state, sync_registration
 
+ANSI_RESET = "\033[0m"
+ANSI_GRAY = "\033[38;5;245m"
+
 
 def compact_usage() -> str:
     return "\n".join(
@@ -134,19 +137,26 @@ def print_registrations() -> int:
     if not regs:
         print("no registrations")
         return 0
+    use_color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    label_width = len("edit_id") + 1
     sections: list[str] = []
     for index, reg in enumerate(regs, start=1):
         url = f"https://drive.google.com/drive/folders/{reg.remote_root_id}" if reg.remote_root_id else "-"
         prefix = f"[{index}]"
         header = prefix + ("-" * max(1, 79 - len(prefix)))
+        body_lines = [
+            f"{'edit_id':<{label_width}}: {reg.id}",
+            f"{'local':<{label_width}}: {reg.local_dir}",
+            f"{'drive':<{label_width}}: {root_name}/{reg.drive_path}",
+            url,
+        ]
+        if use_color:
+            body_lines = [f"{ANSI_GRAY}{line}{ANSI_RESET}" for line in body_lines]
         sections.append(
             "\n".join(
                 [
                     header,
-                    f"edit_id: {reg.id}",
-                    f"local : {reg.local_dir}",
-                    f"drive : {root_name}/{reg.drive_path}",
-                    f"url   : {url}",
+                    *body_lines,
                 ]
             )
         )
