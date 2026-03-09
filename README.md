@@ -20,6 +20,11 @@ pip install -r requirements.txt
 python main.py -h
 ```
 
+## External dependencies
+
+- `notify-send` for timer success notifications
+- a notification daemon such as Mako to display those notifications
+
 ## Google OAuth setup
 
 1. Open Google Cloud Console.
