@@ -92,26 +92,38 @@ def ensure_setup(interactive: bool) -> tuple[Path, str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="gdrive", description="Google Drive backup CLI")
+    parser = argparse.ArgumentParser(
+        prog="gdrive",
+        description="Google Drive backup CLI",
+        add_help=False,
+    )
+    parser.add_argument("-h", action="help", help="show help and exit")
     parser.add_argument("-v", action="store_true", dest="version", help="print version")
     parser.add_argument("-u", action="store_true", dest="upgrade", help="upgrade to latest release")
     subs = parser.add_subparsers(dest="command")
 
-    reg_p = subs.add_parser("reg", help="register folder sync")
+    reg_p = subs.add_parser("reg", help="register folder sync", add_help=False)
+    reg_p.add_argument("-h", action="help", help="show help and exit")
     reg_p.add_argument("local_dir")
     reg_p.add_argument("drive_path")
 
-    subs.add_parser("ls", help="list registrations")
+    ls_p = subs.add_parser("ls", help="list registrations", add_help=False)
+    ls_p.add_argument("-h", action="help", help="show help and exit")
 
-    run_p = subs.add_parser("run", help="run sync")
+    run_p = subs.add_parser("run", help="run sync", add_help=False)
+    run_p.add_argument("-h", action="help", help="show help and exit")
     run_p.add_argument("id", nargs="?")
 
-    rm_p = subs.add_parser("rm", help="remove registration")
+    rm_p = subs.add_parser("rm", help="remove registration", add_help=False)
+    rm_p.add_argument("-h", action="help", help="show help and exit")
     rm_p.add_argument("id")
 
-    subs.add_parser("ti", help="install hourly timer")
-    subs.add_parser("td", help="disable timer")
-    subs.add_parser("st", help="timer status")
+    ti_p = subs.add_parser("ti", help="install hourly timer", add_help=False)
+    ti_p.add_argument("-h", action="help", help="show help and exit")
+    td_p = subs.add_parser("td", help="disable timer", add_help=False)
+    td_p.add_argument("-h", action="help", help="show help and exit")
+    st_p = subs.add_parser("st", help="timer status", add_help=False)
+    st_p.add_argument("-h", action="help", help="show help and exit")
     return parser
 
 
