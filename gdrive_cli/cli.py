@@ -34,6 +34,26 @@ ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
 
 
+def _muted_text(text: str) -> str:
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ:
+        return text
+    return f"{ANSI_GRAY}{text}{ANSI_RESET}"
+
+
+class GrayHelpArgumentParser(argparse.ArgumentParser):
+    def print_help(self, file=None) -> None:
+        stream = file or sys.stdout
+        text = self.format_help()
+        if stream is sys.stdout:
+            stream.write(_muted_text(text))
+            if not text.endswith("\n"):
+                stream.write("\n")
+            return
+        stream.write(text)
+        if not text.endswith("\n"):
+            stream.write("\n")
+
+
 def compact_usage() -> str:
     return "\n".join(
         [
@@ -95,7 +115,7 @@ def ensure_setup(interactive: bool) -> tuple[Path, str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = GrayHelpArgumentParser(
         prog="gdrive",
         description="Google Drive backup CLI",
         add_help=False,
@@ -103,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-h", action="help", help="show help and exit")
     parser.add_argument("-v", action="store_true", dest="version", help="print version")
     parser.add_argument("-u", action="store_true", dest="upgrade", help="upgrade to latest release")
-    subs = parser.add_subparsers(dest="command")
+    subs = parser.add_subparsers(dest="command", parser_class=GrayHelpArgumentParser)
 
     reg_p = subs.add_parser("reg", help="register folder sync", add_help=False)
     reg_p.add_argument("-h", action="help", help="show help and exit")
