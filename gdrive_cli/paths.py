@@ -28,12 +28,8 @@ def token_dir() -> Path:
     return data_home() / "tokens"
 
 
-def token_file_for_preset(preset: str) -> Path:
-    return token_dir() / f"{preset}.json"
-
-
-def token_file_for_account_key(account_key: str) -> Path:
-    return token_dir() / f"{account_key}.json"
+def token_file_for_email(email: str) -> Path:
+    return token_dir() / f"{email.strip().lower()}.json"
 
 
 def state_dir() -> Path:

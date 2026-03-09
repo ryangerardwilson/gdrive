@@ -46,7 +46,7 @@ python main.py 1 run
 
 - Config: `~/.config/gdrive/config.json`
 - Data: `~/.local/share/gdrive/`
-- OAuth token: `~/.local/share/gdrive/tokens/<account_key>.json`
+- OAuth token: `~/.local/share/gdrive/tokens/<email>.json`
 - Per-registration sync state: `~/.local/share/gdrive/state/<preset>-<id>.json`
 
 Example config:
@@ -56,7 +56,6 @@ Example config:
   "accounts": {
     "1": {
       "client_secret_file": "/home/ryan/.config/gdrive/client_secret.json",
-      "account_key": "a1b2c3d4e5f6a7b8",
       "email": "you@example.com",
       "backup_root_name": "Backups",
       "registrations": []

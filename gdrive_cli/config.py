@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,6 @@ class Registration:
 class AccountConfig:
     preset: str
     client_secret_file: Path | None = None
-    account_key: str | None = None
     email: str | None = None
     backup_root_name: str | None = None
     registrations: list[Registration] = field(default_factory=list)
@@ -69,11 +67,8 @@ def normalize_relative_drive_path(value: str, backup_root_name: str) -> str:
     return drive_path
 
 
-def generate_account_key(client_secret_file: str | Path, account_identity: str) -> str:
-    resolved_path = str(Path(client_secret_file).expanduser().resolve())
-    normalized_identity = str(account_identity).strip().lower()
-    digest = hashlib.sha256(f"{resolved_path}|{normalized_identity}".encode("utf-8")).hexdigest()
-    return digest[:16]
+def normalize_account_email(email: str) -> str:
+    return email.strip().lower()
 
 
 def _registration_from_raw(raw: Any) -> Registration | None:
@@ -99,7 +94,6 @@ def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
     if not isinstance(raw, dict):
         raise CliError(f"invalid config: accounts['{preset}'] must be an object")
     client_secret_raw = raw.get("client_secret_file")
-    account_key_raw = raw.get("account_key")
     email_raw = raw.get("email")
     backup_root_raw = raw.get("backup_root_name")
     registrations_raw = raw.get("registrations", [])
@@ -109,10 +103,7 @@ def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
     backup_root_name = None
     if isinstance(backup_root_raw, str) and backup_root_raw.strip():
         backup_root_name = normalize_drive_path(backup_root_raw)
-    account_key = str(account_key_raw).strip() or None if account_key_raw is not None else None
-    email = str(email_raw).strip() or None if email_raw is not None else None
-    if not account_key and client_secret and email:
-        account_key = generate_account_key(client_secret, email)
+    email = normalize_account_email(str(email_raw)) if email_raw is not None and str(email_raw).strip() else None
     registrations: list[Registration] = []
     if registrations_raw is None:
         registrations_raw = []
@@ -125,7 +116,6 @@ def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
     return AccountConfig(
         preset=preset,
         client_secret_file=client_secret,
-        account_key=account_key,
         email=email,
         backup_root_name=backup_root_name,
         registrations=sorted(registrations, key=lambda reg: int(reg.id) if reg.id.isdigit() else reg.id),
@@ -172,9 +162,8 @@ def _serialize_config(config: AppConfig) -> dict[str, Any]:
     accounts_payload: dict[str, Any] = {}
     for preset, account in _sorted_accounts(config.accounts).items():
         accounts_payload[preset] = {
-                "client_secret_file": str(account.client_secret_file.expanduser()) if account.client_secret_file else "",
-                "account_key": account.account_key or "",
-                "email": account.email or "",
+            "client_secret_file": str(account.client_secret_file.expanduser()) if account.client_secret_file else "",
+            "email": account.email or "",
             "backup_root_name": account.backup_root_name or "",
             "registrations": [
                 {
@@ -253,15 +242,13 @@ def upsert_authenticated_account(
     backup_root_name: str,
 ) -> AccountConfig:
     normalized_secret = client_secret_file.expanduser().resolve()
-    normalized_email = account_email.strip().lower()
+    normalized_email = normalize_account_email(account_email)
     normalized_root = normalize_drive_path(backup_root_name)
     config = load_config()
-    account_key = generate_account_key(normalized_secret, normalized_email)
     for account in config.accounts.values():
-        if account.account_key == account_key:
+        if account.email and normalize_account_email(account.email) == normalized_email:
             account.client_secret_file = normalized_secret
             account.email = normalized_email
-            account.account_key = account_key
             account.backup_root_name = normalized_root
             save_config(config)
             return account
@@ -269,7 +256,6 @@ def upsert_authenticated_account(
     account = AccountConfig(
         preset=preset,
         client_secret_file=normalized_secret,
-        account_key=account_key,
         email=normalized_email,
         backup_root_name=normalized_root,
     )

@@ -199,7 +199,7 @@ def auth_account(client_secret_path: str) -> int:
         backup_root_name = input("Drive backup root dir name: ").strip()
         if not backup_root_name:
             print("enter a folder name like `Backups` or `ComputerBackups`", file=sys.stderr)
-    _, email, _ = authorize_account(client_secret)
+    _, email = authorize_account(client_secret)
     account = upsert_authenticated_account(client_secret, email, backup_root_name)
     print(f"authorized\t{account.preset}\t{email}\t{account.backup_root_name}")
     return 0
