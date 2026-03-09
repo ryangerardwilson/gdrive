@@ -143,7 +143,7 @@ def print_registrations() -> int:
             "\n".join(
                 [
                     header,
-                    f"id    : {reg.id}",
+                    f"edit_id: {reg.id}",
                     f"local : {reg.local_dir}",
                     f"drive : {root_name}/{reg.drive_path}",
                     f"url   : {url}",
