@@ -59,6 +59,10 @@ jobs:
               export LD_LIBRARY_PATH="/opt/py/python/lib:${LD_LIBRARY_PATH:-}"
               "$PYBIN" -m pip install -U pip
               "$PYBIN" -m pip install --only-binary=:all: -r requirements.txt
+              # The compiled charset-normalizer wheel pulls in mypyc artifacts that PyInstaller
+              # does not package correctly for this app. Reinstall it from source so the bundle
+              # uses the pure-Python package instead.
+              "$PYBIN" -m pip install --force-reinstall --no-binary=charset-normalizer charset-normalizer
               "$PYBIN" -m pip install --only-binary=:all: pyinstaller
 
               sed -i -E "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" _version.py
