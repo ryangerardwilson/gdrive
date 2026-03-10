@@ -1,10 +1,10 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
+from pathlib import Path
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .errors import ApiError
 
@@ -24,13 +24,25 @@ class RemoteEntry:
         return self.mime_type == FOLDER_MIME
 
 
+@dataclass(slots=True)
+class NavEntry:
+    id: str
+    name: str
+    mime_type: str
+    parent_id: str
+
+    @property
+    def is_dir(self) -> bool:
+        return self.mime_type == FOLDER_MIME
+
+
 def escape_query(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 class DriveClient:
     def __init__(self, creds):
-        self.service = build("drive", "v3", credentials=creds)
+        self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
     def _execute(self, request):
         try:
@@ -77,6 +89,82 @@ class DriveClient:
             existing = self.find_child(parent_id, segment, FOLDER_MIME)
             parent_id = existing["id"] if existing else self.create_folder(parent_id, segment)
         return parent_id
+
+    def list_children(self, parent_id: str) -> list[NavEntry]:
+        entries: list[NavEntry] = []
+        page_token = None
+        while True:
+            response = self._execute(self.service.files().list(
+                q=f"'{parent_id}' in parents and trashed = false",
+                fields="nextPageToken,files(id,name,mimeType,parents)",
+                pageSize=1000,
+                pageToken=page_token,
+                orderBy="folder,name_natural",
+                supportsAllDrives=False,
+            ))
+            for item in response.get("files", []):
+                entries.append(
+                    NavEntry(
+                        id=item["id"],
+                        name=item["name"],
+                        mime_type=item["mimeType"],
+                        parent_id=parent_id,
+                    )
+                )
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        entries.sort(key=lambda entry: (not entry.is_dir, entry.name.lower(), entry.name))
+        return entries
+
+    def get_entry(self, file_id: str) -> NavEntry:
+        item = self._execute(
+            self.service.files().get(
+                fileId=file_id,
+                fields="id,name,mimeType,parents",
+                supportsAllDrives=False,
+            )
+        )
+        parents = item.get("parents", [])
+        return NavEntry(
+            id=item["id"],
+            name=item["name"],
+            mime_type=item["mimeType"],
+            parent_id=parents[0] if parents else "",
+        )
+
+    def copy_file(self, file_id: str, parent_id: str, new_name: str) -> str:
+        result = self._execute(
+            self.service.files().copy(
+                fileId=file_id,
+                body={"name": new_name, "parents": [parent_id]},
+                fields="id",
+                supportsAllDrives=False,
+            )
+        )
+        return result["id"]
+
+    def find_available_name(self, parent_id: str, name: str) -> str:
+        if not self.find_child(parent_id, name):
+            return name
+        stem, dot, suffix = name.rpartition(".")
+        base = stem if dot else name
+        ext = f".{suffix}" if dot else ""
+        for index in range(1, 10_000):
+            candidate = f"{base}-{index}{ext}"
+            if not self.find_child(parent_id, candidate):
+                return candidate
+        raise ApiError(f"could not allocate name for {name}")
+
+    def download_file(self, file_id: str, target_path: Path) -> Path:
+        request = self.service.files().get_media(fileId=file_id, supportsAllDrives=False)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("wb") as handle:
+            downloader = MediaIoBaseDownload(handle, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        return target_path
 
     def list_tree(self, root_id: str) -> dict[str, RemoteEntry]:
         result: dict[str, RemoteEntry] = {}

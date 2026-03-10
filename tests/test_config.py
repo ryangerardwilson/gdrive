@@ -12,6 +12,7 @@ from gdrive_cli.config import (
     normalize_relative_drive_path,
     set_backup_root_name,
     set_client_secret,
+    set_download_dir,
 )
 from gdrive_cli.errors import CliError
 
@@ -74,6 +75,23 @@ class ConfigTests(unittest.TestCase):
     def test_reject_drive_path_with_root_prefix(self):
         with self.assertRaises(CliError):
             normalize_relative_drive_path("Backups/Documents", "Backups")
+
+    def test_set_download_dir_creates_and_saves_path(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.dict(
+                "os.environ",
+                {
+                    "XDG_CONFIG_HOME": str(tmp_path / "config"),
+                    "XDG_DATA_HOME": str(tmp_path / "data"),
+                },
+                clear=False,
+            ):
+                value = set_download_dir("4", str(tmp_path / "downloads"))
+                config = load_config()
+                account = get_account(config, "4")
+                self.assertTrue(value.is_dir())
+                self.assertEqual(account.download_dir, value)
 
     def test_load_config_migrates_legacy_root_to_preset_one(self):
         with TemporaryDirectory() as tmp:

@@ -25,6 +25,7 @@ class AccountConfig:
     client_secret_file: Path | None = None
     email: str | None = None
     backup_root_name: str | None = None
+    download_dir: Path | None = None
     registrations: list[Registration] = field(default_factory=list)
 
 
@@ -96,6 +97,7 @@ def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
     client_secret_raw = raw.get("client_secret_file")
     email_raw = raw.get("email")
     backup_root_raw = raw.get("backup_root_name")
+    download_dir_raw = raw.get("download_dir")
     registrations_raw = raw.get("registrations", [])
     client_secret = None
     if isinstance(client_secret_raw, str) and client_secret_raw.strip():
@@ -103,6 +105,9 @@ def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
     backup_root_name = None
     if isinstance(backup_root_raw, str) and backup_root_raw.strip():
         backup_root_name = normalize_drive_path(backup_root_raw)
+    download_dir = None
+    if isinstance(download_dir_raw, str) and download_dir_raw.strip():
+        download_dir = Path(download_dir_raw).expanduser().resolve()
     email = normalize_account_email(str(email_raw)) if email_raw is not None and str(email_raw).strip() else None
     registrations: list[Registration] = []
     if registrations_raw is None:
@@ -118,6 +123,7 @@ def _account_from_raw(preset: str, raw: Any) -> AccountConfig:
         client_secret_file=client_secret,
         email=email,
         backup_root_name=backup_root_name,
+        download_dir=download_dir,
         registrations=sorted(registrations, key=lambda reg: int(reg.id) if reg.id.isdigit() else reg.id),
     )
 
@@ -165,6 +171,7 @@ def _serialize_config(config: AppConfig) -> dict[str, Any]:
             "client_secret_file": str(account.client_secret_file.expanduser()) if account.client_secret_file else "",
             "email": account.email or "",
             "backup_root_name": account.backup_root_name or "",
+            "download_dir": str(account.download_dir.expanduser()) if account.download_dir else "",
             "registrations": [
                 {
                     "id": registration.id,
@@ -216,6 +223,12 @@ def require_backup_root_name(account: AccountConfig) -> str:
     if not account.backup_root_name:
         raise CliError(f"preset `{account.preset}` is missing a Drive backup root dir name")
     return account.backup_root_name
+
+
+def require_download_dir(account: AccountConfig) -> Path:
+    if not account.download_dir:
+        raise CliError(f"preset `{account.preset}` is missing a download dir")
+    return account.download_dir
 
 
 def set_client_secret(preset: str, value: str) -> Path:
@@ -272,6 +285,19 @@ def set_backup_root_name(preset: str, value: str) -> str:
     account.backup_root_name = normalized
     save_config(config)
     return normalized
+
+
+def set_download_dir(preset: str, value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.exists() and not path.is_dir():
+        raise CliError(f"download dir is not a directory: {path}")
+    resolved = path.resolve(strict=False)
+    resolved.mkdir(parents=True, exist_ok=True)
+    config = load_config()
+    account = ensure_account(config, preset)
+    account.download_dir = resolved
+    save_config(config)
+    return resolved
 
 
 def list_registrations(preset: str) -> list[Registration]:

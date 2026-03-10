@@ -8,6 +8,7 @@ from gdrive_cli.cli import (
     _build_runtime_command,
     ensure_backup_root_name,
     ensure_client_secret,
+    ensure_download_dir,
     main,
     write_timer_units,
 )
@@ -24,6 +25,7 @@ class CliUsageTests(unittest.TestCase):
         self.assertIn("register folders to sync into Drive, then inspect or remove registrations", output)
         self.assertIn("# <preset> reg <local_dir> <drive_path> and <preset> ls|rm <edit_id>", output)
         self.assertIn("gdrive 1 reg ~/Documents Documents", output)
+        self.assertIn("gdrive 1 nav", output)
         self.assertNotIn("commands:", output)
         self.assertNotIn("usage:", output)
 
@@ -57,6 +59,27 @@ class CliUsageTests(unittest.TestCase):
                 with patch("sys.stdin.isatty", return_value=True):
                     with patch("builtins.input", return_value=secret_path):
                         self.assertEqual(str(ensure_client_secret("2", interactive=True)), secret_path)
+
+    def test_ensure_download_dir_prompts_and_saves_for_preset(self):
+        with TemporaryDirectory() as tmp:
+            with patch.dict(
+                "os.environ",
+                {
+                    "XDG_CONFIG_HOME": f"{tmp}/config",
+                    "XDG_DATA_HOME": f"{tmp}/data",
+                },
+                clear=False,
+            ):
+                expected = Path(tmp) / "Downloads"
+                with patch("sys.stdin.isatty", return_value=True):
+                    with patch("builtins.input", return_value=str(expected)):
+                        self.assertEqual(ensure_download_dir("2", interactive=True), expected.resolve())
+
+    def test_nav_dispatches_to_run_nav(self):
+        with patch("gdrive_cli.cli.run_nav", return_value=0) as run_nav:
+            code = main(["1", "nav"])
+        self.assertEqual(code, 0)
+        run_nav.assert_called_once_with("1")
 
     def test_build_runtime_command_uses_launcher_only_when_frozen(self):
         with patch("sys.executable", "/tmp/gdrive"), patch("sys.frozen", True, create=True):

@@ -1,0 +1,941 @@
+from __future__ import annotations
+
+import curses
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .drive_api import DriveClient, NavEntry
+
+
+@dataclass(slots=True)
+class FolderState:
+    folder_id: str
+    path: str
+    entries: list[NavEntry]
+    selected: int = 0
+    scroll: int = 0
+
+
+@dataclass(slots=True)
+class DisplayItem:
+    entry: NavEntry
+    depth: int
+
+
+@dataclass(slots=True)
+class ClipboardEntry:
+    id: str
+    name: str
+    mime_type: str
+    parent_id: str
+
+    @property
+    def is_dir(self) -> bool:
+        return self.mime_type == "application/vnd.google-apps.folder"
+
+
+@dataclass(slots=True)
+class ClipboardState:
+    entries: list[ClipboardEntry] = field(default_factory=list)
+    cut: bool = False
+
+    @property
+    def has_entries(self) -> bool:
+        return bool(self.entries)
+
+    @property
+    def entry_count(self) -> int:
+        return len(self.entries)
+
+    def clear(self) -> None:
+        self.entries = []
+        self.cut = False
+
+    def status_text(self) -> str:
+        if not self.entries:
+            return ""
+        if len(self.entries) == 1:
+            suffix = "/" if self.entries[0].is_dir else ""
+            prefix = "CUT " if self.cut else ""
+            return f"{prefix}{self.entries[0].name}{suffix}"
+        prefix = "CUT " if self.cut else ""
+        return f"{prefix}{len(self.entries)} items"
+
+
+CHEATSHEET = r"""
+GDRIVE NAV CHEATSHEET
+
+Navigation
+  h               Parent directory
+  l               Enter directory or download file
+  j / k           Down / Up
+  Enter           Enter directory or download file
+  Esc             Exit visual mode, or quit when visual mode is off
+
+Clipboard & Multi Operations
+  m               Toggle mark on current item (✓) - auto-advance
+  y               Yank (copy) all marked items into clipboard immediately
+  yy              Yank current row into clipboard when nothing marked
+  dd              Cut marked items (or current row) into clipboard
+  p               Paste clipboard into selected directory
+                  or into the current folder when a file is selected
+  x               Prompt before deleting marked items or current entry
+
+Visual Mode
+  v               Enter visual selection; press v again to add range to marks
+  j / k           Extend / shrink selection while in visual mode
+  Esc             Exit visual mode without adding range
+
+Other
+  .               Repeat last repeatable command
+  ?               Toggle this help
+  q               Quit the app
+
+Leader Commands (press "," first)
+  ,xr             Toggle inline expansion / collapse for selection
+  ,xc             Collapse all inline expansions
+  ,xar            Expand all directories recursively
+  ,k / ,j         Jump to top / bottom
+  ,rn             Rename selected item
+""".strip()
+
+
+def _display_name(entry: NavEntry) -> str:
+    return f"{entry.name}/" if entry.is_dir else entry.name
+
+
+def _clamp_scroll(selected: int, scroll: int, height: int, total: int) -> int:
+    if total <= 0 or height <= 0:
+        return 0
+    if selected < scroll:
+        return selected
+    bottom = scroll + height - 1
+    if selected > bottom:
+        return max(0, selected - height + 1)
+    return min(scroll, max(0, total - height))
+
+
+def _resolve_download_path(download_dir: Path, name: str) -> Path:
+    target = download_dir / name
+    if not target.exists():
+        return target
+    stem = target.stem
+    suffix = target.suffix
+    for index in range(1, 10_000):
+        candidate = download_dir / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not allocate download path for {name}")
+
+
+class DriveNavigator:
+    def __init__(self, stdscr, client: DriveClient, preset: str, download_dir: Path):
+        self.stdscr = stdscr
+        self.client = client
+        self.preset = preset
+        self.download_dir = download_dir
+        self.status_message = f"download dir {self._pretty_path(download_dir)}"
+        self.show_help = False
+        self.help_scroll = 0
+        self.marked_ids: set[str] = set()
+        self.clipboard = ClipboardState()
+        self.pending_operator: str | None = None
+        self.pending_comma = False
+        self.comma_sequence = ""
+        self.expanded_ids: set[str] = set()
+        self.children_cache: dict[str, list[NavEntry]] = {}
+        self.visual_mode = False
+        self.visual_anchor_index: int | None = None
+        self.visual_active_index: int | None = None
+        self.last_repeat_sequence: list[int] | None = None
+        self.is_repeating = False
+        self.stack = [self._load_folder("root", "/")]
+
+    @property
+    def current(self) -> FolderState:
+        return self.stack[-1]
+
+    def _load_folder(self, folder_id: str, path: str) -> FolderState:
+        entries = self.client.list_children(folder_id)
+        self.children_cache[folder_id] = entries
+        return FolderState(folder_id=folder_id, path=path, entries=entries)
+
+    def _display_items(self) -> list[DisplayItem]:
+        items: list[DisplayItem] = []
+        for entry in self.current.entries:
+            items.append(DisplayItem(entry=entry, depth=0))
+            if entry.is_dir and entry.id in self.expanded_ids:
+                self._append_expanded(entry.id, depth=1, items=items)
+        return items
+
+    def _append_expanded(self, folder_id: str, depth: int, items: list[DisplayItem]) -> None:
+        children = self.children_cache.get(folder_id)
+        if children is None:
+            children = self.client.list_children(folder_id)
+            self.children_cache[folder_id] = children
+        for child in children:
+            items.append(DisplayItem(entry=child, depth=depth))
+            if child.is_dir and child.id in self.expanded_ids:
+                self._append_expanded(child.id, depth + 1, items)
+
+    def _selected_entry(self) -> NavEntry | None:
+        items = self._display_items()
+        if not items:
+            return None
+        index = max(0, min(self.current.selected, len(items) - 1))
+        self.current.selected = index
+        return items[index].entry
+
+    def _clear_operator(self) -> None:
+        self.pending_operator = None
+        self.pending_comma = False
+        self.comma_sequence = ""
+
+    def _record_repeat_sequence(self, keys: list[int]) -> None:
+        if self.is_repeating:
+            return
+        self.last_repeat_sequence = list(keys) if keys else None
+
+    def _reload_current_folder(self) -> None:
+        current = self.current
+        selected_entry = self._selected_entry()
+        selected_id = selected_entry.id if selected_entry else None
+        refreshed = self._load_folder(current.folder_id, current.path)
+        self.stack[-1] = refreshed
+        display_items = self._display_items()
+        if selected_id:
+            for index, item in enumerate(display_items):
+                if item.entry.id == selected_id:
+                    refreshed.selected = index
+                    break
+            else:
+                refreshed.selected = min(current.selected, max(0, len(display_items) - 1))
+        else:
+            refreshed.selected = min(current.selected, max(0, len(display_items) - 1))
+        refreshed.scroll = current.scroll
+        self._clear_missing_marks()
+
+    def _clear_missing_marks(self) -> None:
+        visible_ids = set(self.children_cache.keys())
+        for entries in self.children_cache.values():
+            visible_ids.update(entry.id for entry in entries)
+        self.marked_ids.intersection_update(visible_ids)
+
+    def _mark_current(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            self.status_message = "nothing to mark"
+            return
+        if entry.id in self.marked_ids:
+            self.marked_ids.remove(entry.id)
+            self.status_message = f"unmarked {entry.name}"
+        else:
+            self.marked_ids.add(entry.id)
+            self.status_message = f"marked {entry.name}"
+            self._move(1)
+
+    def _selected_or_marked_entries(self) -> list[NavEntry]:
+        display_items = self._display_items()
+        if self.marked_ids:
+            entries: list[NavEntry] = []
+            seen: set[str] = set()
+            for item in display_items:
+                if item.entry.id in self.marked_ids and item.entry.id not in seen:
+                    entries.append(item.entry)
+                    seen.add(item.entry.id)
+            return sorted(entries, key=lambda item: (item.name.lower(), item.name))
+        current = self._selected_entry()
+        return [current] if current else []
+
+    def _visual_indices(self, total: int) -> list[int]:
+        if not self.visual_mode or self.visual_anchor_index is None or self.visual_active_index is None:
+            return []
+        start = max(0, min(self.visual_anchor_index, self.visual_active_index))
+        end = min(total - 1, max(self.visual_anchor_index, self.visual_active_index))
+        return list(range(start, end + 1)) if total > 0 else []
+
+    def _visual_entries(self) -> list[NavEntry]:
+        items = self._display_items()
+        return [items[index].entry for index in self._visual_indices(len(items)) if 0 <= index < len(items)]
+
+    def _enter_visual_mode(self) -> None:
+        items = self._display_items()
+        if not items:
+            return
+        self.visual_mode = True
+        self.visual_anchor_index = self.current.selected
+        self.visual_active_index = self.current.selected
+        self.status_message = "-- VISUAL --"
+
+    def _exit_visual_mode(self, *, clear_message: bool = True) -> None:
+        self.visual_mode = False
+        self.visual_anchor_index = None
+        self.visual_active_index = None
+        if clear_message:
+            self.status_message = ""
+
+    def _commit_visual_marks(self) -> None:
+        entries = self._visual_entries()
+        if not entries:
+            self._exit_visual_mode()
+            return
+        for entry in entries:
+            self.marked_ids.add(entry.id)
+        count = len(entries)
+        noun = "item" if count == 1 else "items"
+        self._exit_visual_mode(clear_message=False)
+        self.status_message = f"Pinned {count} {noun}"
+
+    def _stage_clipboard(self, entries: list[NavEntry], *, cut: bool) -> None:
+        if not entries:
+            self.status_message = "nothing selected"
+            return
+        self.clipboard.entries = [
+            ClipboardEntry(id=entry.id, name=entry.name, mime_type=entry.mime_type, parent_id=entry.parent_id)
+            for entry in entries
+        ]
+        self.clipboard.cut = cut
+        count = len(entries)
+        noun = "item" if count == 1 else "items"
+        action = "Cut" if cut else "Yanked"
+        self.status_message = f"{action} {count} {noun} to clipboard"
+        self.marked_ids.clear()
+
+    def _target_folder_id(self) -> str:
+        selected = self._selected_entry()
+        if selected and selected.is_dir:
+            return selected.id
+        return self.current.folder_id
+
+    def _current_selected_parent_id(self) -> str:
+        selected = self._selected_entry()
+        if selected:
+            return selected.parent_id
+        return self.current.folder_id
+
+    def _copy_entry_recursive(self, source: ClipboardEntry, target_parent_id: str) -> None:
+        new_name = self.client.find_available_name(target_parent_id, source.name)
+        if source.is_dir:
+            new_folder_id = self.client.create_folder(target_parent_id, new_name)
+            for child in self.client.list_children(source.id):
+                self._copy_entry_recursive(
+                    ClipboardEntry(
+                        id=child.id,
+                        name=child.name,
+                        mime_type=child.mime_type,
+                        parent_id=child.parent_id,
+                    ),
+                    new_folder_id,
+                )
+            return
+        self.client.copy_file(source.id, target_parent_id, new_name)
+
+    def _move_entry(self, source: ClipboardEntry, target_parent_id: str) -> None:
+        new_name = self.client.find_available_name(target_parent_id, source.name)
+        self.client.move_entry(
+            file_id=source.id,
+            new_parent_id=target_parent_id,
+            new_name=new_name,
+            old_parent_id=source.parent_id,
+        )
+
+    def _paste_clipboard(self) -> None:
+        if not self.clipboard.has_entries:
+            self.status_message = "clipboard empty"
+            return
+        target_parent_id = self._target_folder_id()
+        try:
+            for entry in list(self.clipboard.entries):
+                if self.clipboard.cut:
+                    self._move_entry(entry, target_parent_id)
+                else:
+                    self._copy_entry_recursive(entry, target_parent_id)
+            count = self.clipboard.entry_count
+            noun = "item" if count == 1 else "items"
+            action = "Moved" if self.clipboard.cut else "Pasted"
+            self.status_message = f"{action} {count} {noun}"
+            if self.clipboard.cut:
+                self.clipboard.clear()
+            self._reload_current_folder()
+            self._clear_missing_marks()
+        except Exception as exc:
+            self.status_message = str(exc)
+
+    def _delete_prompt(self, entries: list[NavEntry]) -> bool:
+        count = len(entries)
+        noun = "item" if count == 1 else "items"
+        prompt = f"Delete {count} {noun}? [y/N]"
+        height, width = self.stdscr.getmaxyx()
+        self._render_line(height - 1, prompt[: max(0, width - 1)], curses.A_BOLD)
+        while True:
+            key = self.stdscr.getch()
+            if key in (ord("y"), ord("Y")):
+                return True
+            if key in (ord("n"), ord("N"), 27, 10, 13):
+                return False
+
+    def _delete_entries(self) -> None:
+        entries = self._visual_entries() if self.visual_mode else self._selected_or_marked_entries()
+        if not entries:
+            self.status_message = "nothing selected"
+            return
+        if not self._delete_prompt(entries):
+            self.status_message = "Deletion cancelled"
+            return
+        try:
+            for entry in entries:
+                self.client.delete_entry(entry.id)
+            count = len(entries)
+            noun = "item" if count == 1 else "items"
+            self.status_message = f"Deleted {count} {noun}"
+            self.marked_ids.difference_update({entry.id for entry in entries})
+            if self.visual_mode:
+                self._exit_visual_mode(clear_message=False)
+            self._reload_current_folder()
+        except Exception as exc:
+            self.status_message = str(exc)
+
+    def _pretty_path(self, path: Path) -> str:
+        try:
+            return str(path).replace(str(Path.home()), "~", 1)
+        except Exception:
+            return str(path)
+
+    @staticmethod
+    def _is_word_char(ch: str) -> bool:
+        return ch.isalnum() or ch == "_"
+
+    def _move_word_left(self, text: str, cursor: int) -> int:
+        i = max(0, min(cursor, len(text)))
+        while i > 0 and not self._is_word_char(text[i - 1]):
+            i -= 1
+        while i > 0 and self._is_word_char(text[i - 1]):
+            i -= 1
+        return i
+
+    def _move_word_right(self, text: str, cursor: int) -> int:
+        n = len(text)
+        i = max(0, min(cursor, n))
+        while i < n and not self._is_word_char(text[i]):
+            i += 1
+        while i < n and self._is_word_char(text[i]):
+            i += 1
+        return i
+
+    def _delete_prev_word(self, text: str, cursor: int) -> tuple[str, int]:
+        if cursor <= 0:
+            return text, cursor
+        start = self._move_word_left(text, cursor)
+        return text[:start] + text[cursor:], start
+
+    def _read_key_with_meta(self) -> tuple[int, int | None]:
+        key = self.stdscr.getch()
+        if key != 27:
+            return key, None
+        self.stdscr.timeout(25)
+        next_key = self.stdscr.getch()
+        self.stdscr.timeout(-1)
+        if next_key == -1:
+            return 27, None
+        return 27, next_key
+
+    def _render_prompt_input(
+        self,
+        prompt_y: int,
+        max_x: int,
+        prompt_display: str,
+        text: str,
+        cursor: int,
+    ) -> None:
+        available = max(1, max_x - len(prompt_display) - 1)
+        max_start = max(0, len(text) - available)
+        viewport_start = max(0, cursor - available + 1)
+        if cursor < viewport_start:
+            viewport_start = cursor
+        if viewport_start > max_start:
+            viewport_start = max_start
+        visible = text[viewport_start : viewport_start + available]
+        cursor_screen_x = min(max_x - 1, len(prompt_display) + (cursor - viewport_start))
+
+        self.stdscr.move(prompt_y, 0)
+        self.stdscr.clrtoeol()
+        self.stdscr.addstr(prompt_y, 0, prompt_display)
+        if visible:
+            self.stdscr.addstr(prompt_y, len(prompt_display), visible)
+        self.stdscr.move(prompt_y, cursor_screen_x)
+        self.stdscr.refresh()
+
+    def _enter(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            self.status_message = "empty folder"
+            return
+        try:
+            if entry.is_dir:
+                self._exit_visual_mode()
+                next_path = "/" if self.current.path == "/" and not entry.name else f"{self.current.path.rstrip('/')}/{entry.name}"
+                self.stack.append(self._load_folder(entry.id, next_path))
+                self.status_message = next_path
+                return
+            target_path = _resolve_download_path(self.download_dir, entry.name)
+            self.client.download_file(entry.id, target_path)
+            self.status_message = f"downloaded {entry.name} -> {target_path}"
+        except Exception as exc:
+            self.status_message = str(exc)
+
+    def _back(self) -> None:
+        if len(self.stack) == 1:
+            self.status_message = "at root"
+            return
+        self._exit_visual_mode()
+        self.stack.pop()
+        self.status_message = self.current.path
+
+    def _move(self, delta: int) -> None:
+        items = self._display_items()
+        if not items:
+            self.current.selected = 0
+            return
+        self.current.selected = max(0, min(len(items) - 1, self.current.selected + delta))
+        if self.visual_mode:
+            self.visual_active_index = self.current.selected
+
+    def _toggle_expand_selected(self) -> None:
+        entry = self._selected_entry()
+        if entry is None or not entry.is_dir:
+            self.status_message = "select a directory"
+            return
+        if entry.id in self.expanded_ids:
+            for folder_id in list(self.expanded_ids):
+                if folder_id == entry.id:
+                    self.expanded_ids.discard(folder_id)
+            self.status_message = f"collapsed {entry.name}"
+            return
+        self.children_cache[entry.id] = self.client.list_children(entry.id)
+        self.expanded_ids.add(entry.id)
+        self.status_message = f"expanded {entry.name}"
+
+    def _collapse_all_expanded(self) -> None:
+        self.expanded_ids.clear()
+        self.status_message = "collapsed all"
+
+    def _expand_all_recursive(self) -> None:
+        count = 0
+        queue = [item.entry for item in self._display_items() if item.entry.is_dir]
+        seen: set[str] = set()
+        while queue:
+            entry = queue.pop(0)
+            if entry.id in seen:
+                continue
+            seen.add(entry.id)
+            children = self.client.list_children(entry.id)
+            self.children_cache[entry.id] = children
+            if entry.id not in self.expanded_ids:
+                self.expanded_ids.add(entry.id)
+                count += 1
+            for child in children:
+                if child.is_dir:
+                    queue.append(child)
+        self.status_message = f"expanded {count} directories" if count else "no directories to expand"
+
+    def _jump_to(self, which: str) -> None:
+        items = self._display_items()
+        if not items:
+            return
+        self.current.selected = 0 if which == "top" else len(items) - 1
+        if self.visual_mode:
+            self.visual_active_index = self.current.selected
+
+    def _prompt_input(self, prompt: str, initial: str = "") -> str | None:
+        max_y, max_x = self.stdscr.getmaxyx()
+        if max_y < 2 or max_x < 20:
+            return None
+
+        prompt_y = max_y - 1
+        prompt_display = prompt[: max_x - 1] if max_x > 0 else ""
+        max_input_width = max(10, max_x - len(prompt_display) - 1)
+        text = initial[:max_input_width]
+        cursor = len(text)
+
+        leaveok_changed = False
+        try:
+            self.stdscr.timeout(-1)
+            try:
+                self.stdscr.leaveok(False)
+                leaveok_changed = True
+            except Exception:
+                pass
+            try:
+                curses.curs_set(1)
+            except curses.error:
+                pass
+
+            self._render_prompt_input(prompt_y, max_x, prompt_display, text, cursor)
+
+            while True:
+                key, meta = self._read_key_with_meta()
+                if key in (10, 13, curses.KEY_ENTER):
+                    break
+                if key == 27 and meta is None:
+                    text = ""
+                    break
+
+                handled = False
+                if key == 27 and meta is not None:
+                    if meta in (ord("b"), ord("B")):
+                        cursor = self._move_word_left(text, cursor)
+                        handled = True
+                    elif meta in (ord("f"), ord("F")):
+                        cursor = self._move_word_right(text, cursor)
+                        handled = True
+                    elif meta in (127, 8, curses.KEY_BACKSPACE):
+                        text, cursor = self._delete_prev_word(text, cursor)
+                        handled = True
+                elif key in (curses.KEY_BACKSPACE, 127, 8):
+                    if cursor > 0:
+                        text = text[: cursor - 1] + text[cursor:]
+                        cursor -= 1
+                    handled = True
+                elif key == curses.KEY_DC:
+                    if cursor < len(text):
+                        text = text[:cursor] + text[cursor + 1 :]
+                    handled = True
+                elif key in (curses.KEY_LEFT, 2):
+                    cursor = max(0, cursor - 1)
+                    handled = True
+                elif key in (curses.KEY_RIGHT, 6):
+                    cursor = min(len(text), cursor + 1)
+                    handled = True
+                elif key in (curses.KEY_HOME, 1):
+                    cursor = 0
+                    handled = True
+                elif key in (curses.KEY_END, 5):
+                    cursor = len(text)
+                    handled = True
+                elif key == 23:
+                    text, cursor = self._delete_prev_word(text, cursor)
+                    handled = True
+                elif 32 <= key <= 126 and len(text) < max_input_width:
+                    text = text[:cursor] + chr(key) + text[cursor:]
+                    cursor += 1
+                    handled = True
+
+                if handled:
+                    self._render_prompt_input(prompt_y, max_x, prompt_display, text, cursor)
+        finally:
+            self.stdscr.timeout(-1)
+            if leaveok_changed:
+                try:
+                    self.stdscr.leaveok(True)
+                except Exception:
+                    pass
+            try:
+                curses.curs_set(0)
+            except curses.error:
+                pass
+        result = text.strip()
+        return result or None
+
+    def _rename_selected(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            self.status_message = "nothing selected"
+            return
+        new_name = self._prompt_input("Rename to: ", entry.name)
+        if new_name is None:
+            self.status_message = "Rename cancelled"
+            return
+        if not new_name or new_name == entry.name:
+            self.status_message = "Rename cancelled"
+            return
+        try:
+            unique_name = self.client.find_available_name(entry.parent_id, new_name)
+            self.client.rename_entry(entry.id, unique_name)
+            self.status_message = f"Renamed to {unique_name}"
+            self._reload_current_folder()
+        except Exception as exc:
+            self.status_message = str(exc)
+
+    def _handle_normal_key(self, key: int) -> bool:
+        if key == 27 and self.visual_mode:
+            self._clear_operator()
+            self._exit_visual_mode(clear_message=False)
+            self.status_message = "Visual cancelled"
+            return False
+        if key in (ord("q"), 27):
+            return True
+        if self.pending_comma:
+            if 32 <= key <= 126:
+                self.comma_sequence += chr(key)
+                if self.comma_sequence == "j":
+                    self._jump_to("bottom")
+                    self._record_repeat_sequence([ord(","), ord("j")])
+                    self._clear_operator()
+                    return False
+                if self.comma_sequence == "k":
+                    self._jump_to("top")
+                    self._record_repeat_sequence([ord(","), ord("k")])
+                    self._clear_operator()
+                    return False
+                if self.comma_sequence == "xr":
+                    self._toggle_expand_selected()
+                    self._record_repeat_sequence([ord(","), ord("x"), ord("r")])
+                    self._clear_operator()
+                    return False
+                if self.comma_sequence == "xc":
+                    self._collapse_all_expanded()
+                    self._record_repeat_sequence([ord(","), ord("x"), ord("c")])
+                    self._clear_operator()
+                    return False
+                if self.comma_sequence == "xar":
+                    self._expand_all_recursive()
+                    self._record_repeat_sequence([ord(","), ord("x"), ord("a"), ord("r")])
+                    self._clear_operator()
+                    return False
+                if self.comma_sequence == "rn":
+                    self._rename_selected()
+                    self._record_repeat_sequence([ord(","), ord("r"), ord("n")])
+                    self._clear_operator()
+                    return False
+                if not any(cmd.startswith(self.comma_sequence) for cmd in ("j", "k", "xr", "xc", "xar", "rn")):
+                    self._clear_operator()
+                return False
+            self._clear_operator()
+            return False
+        if key == ord("."):
+            if self.is_repeating:
+                return False
+            if not self.last_repeat_sequence:
+                self.status_message = "Nothing to repeat"
+                return False
+            sequence = list(self.last_repeat_sequence)
+            self.is_repeating = True
+            try:
+                for seq_key in sequence:
+                    if self._handle_normal_key(seq_key):
+                        return True
+            finally:
+                self.is_repeating = False
+            return False
+        if key == ord("?"):
+            self._clear_operator()
+            self.show_help = True
+            self.help_scroll = 0
+            return False
+        if key == ord(","):
+            self.pending_comma = True
+            self.comma_sequence = ""
+            return False
+        if key in (ord("j"), curses.KEY_DOWN):
+            self._clear_operator()
+            self._move(1)
+            return False
+        if key in (ord("k"), curses.KEY_UP):
+            self._clear_operator()
+            self._move(-1)
+            return False
+        if key in (ord("h"), curses.KEY_LEFT, curses.KEY_BACKSPACE, 127):
+            self._clear_operator()
+            self._back()
+            return False
+        if key in (ord("l"), curses.KEY_RIGHT, 10, 13):
+            self._clear_operator()
+            self._enter()
+            return False
+        if key == ord("m"):
+            self._clear_operator()
+            self._exit_visual_mode()
+            self._mark_current()
+            self._record_repeat_sequence([ord("m")])
+            return False
+        if key == ord("v"):
+            self._clear_operator()
+            if self.visual_mode:
+                self._commit_visual_marks()
+            else:
+                self._enter_visual_mode()
+            return False
+        if key == ord("p"):
+            self._clear_operator()
+            self._exit_visual_mode()
+            self._paste_clipboard()
+            self._record_repeat_sequence([ord("p")])
+            return False
+        if key == ord("x"):
+            self._clear_operator()
+            self._delete_entries()
+            self._record_repeat_sequence([ord("x")])
+            return False
+        if key == ord("y"):
+            if self.pending_operator == "y":
+                self._stage_clipboard(self._visual_entries() if self.visual_mode else self._selected_or_marked_entries(), cut=False)
+                self._clear_operator()
+                self._exit_visual_mode()
+                self._record_repeat_sequence([ord("y"), ord("y")])
+                return False
+            if self.marked_ids:
+                self._stage_clipboard(self._selected_or_marked_entries(), cut=False)
+                self._clear_operator()
+                self._record_repeat_sequence([ord("y")])
+                return False
+            self.pending_operator = "y"
+            self.status_message = "y"
+            return False
+        if key == ord("d"):
+            if self.pending_operator == "d":
+                self._stage_clipboard(self._visual_entries() if self.visual_mode else self._selected_or_marked_entries(), cut=True)
+                self._clear_operator()
+                self._exit_visual_mode()
+                self._reload_current_folder()
+                self._record_repeat_sequence([ord("d"), ord("d")])
+                return False
+            self.pending_operator = "d"
+            self.status_message = "d"
+            return False
+        self._clear_operator()
+        return False
+
+    def _render_line(self, y: int, text: str, attr: int = 0) -> None:
+        height, width = self.stdscr.getmaxyx()
+        if y >= height:
+            return
+        try:
+            self.stdscr.move(y, 0)
+            self.stdscr.clrtoeol()
+            self.stdscr.addnstr(y, 0, text, max(0, width - 1), attr)
+        except curses.error:
+            pass
+
+    def _compose_status(self, *, scroll_indicator: str = "") -> str:
+        parts: list[str] = []
+        if not self.show_help:
+            parts.append("? help")
+        clip = self.clipboard.status_text()
+        if clip:
+            parts.append(f"CLIP: {clip}")
+        if self.marked_ids:
+            parts.append(f"MARKED: {len(self.marked_ids)}")
+        visual_count = len(self._visual_indices(len(self._display_items())))
+        if visual_count:
+            noun = "item" if visual_count == 1 else "items"
+            parts.append(f"-- VISUAL -- ({visual_count} {noun})")
+        if self.pending_comma:
+            parts.append("," + self.comma_sequence)
+        if self.pending_operator:
+            parts.append(self.pending_operator)
+        if scroll_indicator.strip():
+            parts.append(scroll_indicator.strip())
+        if self.status_message:
+            parts.append(self.status_message)
+        return "  ".join(parts) if parts else " "
+
+    def _render_help(self) -> None:
+        height, width = self.stdscr.getmaxyx()
+        lines = [line.rstrip() for line in CHEATSHEET.splitlines()]
+        total = len(lines)
+        visible_rows = max(1, height - 1)
+        start = max(0, min(self.help_scroll, max(0, total - visible_rows)))
+        visible = lines[start : start + visible_rows]
+        self.stdscr.erase()
+        for row, line in enumerate(visible):
+            self._render_line(row, line[:width])
+        self._render_line(height - 1, f"HELP {start + 1}-{start + len(visible)}/{total}", curses.A_BOLD)
+
+    def render(self) -> None:
+        self.stdscr.erase()
+        height, width = self.stdscr.getmaxyx()
+        if self.show_help:
+            self._render_help()
+            self.stdscr.refresh()
+            return
+        list_start_y = 2
+        list_height = max(0, height - list_start_y - 1)
+        items = self._display_items()
+        self.current.scroll = _clamp_scroll(
+            selected=self.current.selected,
+            scroll=self.current.scroll,
+            height=list_height,
+            total=len(items),
+        )
+        self._render_line(0, self.current.path[: max(0, width - 1)])
+        visible = items[self.current.scroll : self.current.scroll + list_height]
+        if not visible:
+            empty_msg = "(empty folder)"
+            y = list_start_y + (list_height // 2 if list_height else 0)
+            self._render_line(y, empty_msg[: max(0, width - 1)], curses.A_DIM)
+        visual_indices = set(self._visual_indices(len(items)))
+        for offset, item in enumerate(visible):
+            absolute_index = self.current.scroll + offset
+            entry = item.entry
+            marker = ">" if absolute_index == self.current.selected else " "
+            mark = "✓" if entry.id in self.marked_ids else " "
+            if entry.is_dir:
+                prefix = "▾ " if entry.id in self.expanded_ids else "▸ "
+            else:
+                prefix = "  "
+            indent = "  " * item.depth
+            row = f"{indent}{marker}{mark} {prefix}{_display_name(entry)}"
+            attr = curses.A_BOLD if absolute_index == self.current.selected else curses.A_NORMAL
+            if absolute_index in visual_indices:
+                attr |= curses.A_REVERSE
+            self._render_line(list_start_y + offset, row[: max(0, width - 1)], attr)
+        scroll_indicator = ""
+        if len(items) > list_height and list_height > 0:
+            top = self.current.scroll + 1
+            bottom = min(len(items), self.current.scroll + list_height)
+            scroll_indicator = f"[{top}-{bottom}/{len(items)}]"
+        self._render_line(height - 1, self._compose_status(scroll_indicator=scroll_indicator)[: max(0, width - 1)])
+        self.stdscr.refresh()
+
+    def run(self) -> int:
+        while True:
+            self.render()
+            key = self.stdscr.getch()
+            if self.show_help:
+                lines = len(CHEATSHEET.splitlines())
+                visible_rows = max(1, self.stdscr.getmaxyx()[0] - 1)
+                max_scroll = max(0, lines - visible_rows)
+                if key == ord("?"):
+                    self.show_help = False
+                    self.help_scroll = 0
+                    continue
+                if key in (ord("j"), curses.KEY_DOWN):
+                    self.help_scroll = min(max_scroll, self.help_scroll + 1)
+                    continue
+                if key in (ord("k"), curses.KEY_UP):
+                    self.help_scroll = max(0, self.help_scroll - 1)
+                    continue
+                if key in (ord("q"), 27):
+                    self.show_help = False
+                    self.help_scroll = 0
+                    continue
+                continue
+            if self._handle_normal_key(key):
+                return 0
+
+
+def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path) -> int:
+    curses.curs_set(0)
+    try:
+        curses.noecho()
+        curses.raw()
+        curses.nonl()
+    except curses.error:
+        pass
+    try:
+        curses.start_color()
+        curses.use_default_colors()
+    except Exception:
+        pass
+    stdscr.keypad(True)
+    try:
+        stdscr.leaveok(True)
+        stdscr.idlok(True)
+    except Exception:
+        pass
+    navigator = DriveNavigator(stdscr=stdscr, client=client, preset=preset, download_dir=download_dir)
+    return navigator.run()
+
+
+def browse_drive(client: DriveClient, preset: str, download_dir: Path) -> int:
+    return curses.wrapper(lambda stdscr: _curses_main(stdscr, client, preset, download_dir))
