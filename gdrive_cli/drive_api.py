@@ -9,6 +9,22 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from .errors import ApiError
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
+EXPORT_MIME_TYPES: dict[str, tuple[str, str]] = {
+    "application/vnd.google-apps.document": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".docx",
+    ),
+    "application/vnd.google-apps.spreadsheet": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsx",
+    ),
+    "application/vnd.google-apps.presentation": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".pptx",
+    ),
+    "application/vnd.google-apps.drawing": ("image/png", ".png"),
+    "application/vnd.google-apps.script": ("application/vnd.google-apps.script+json", ".json"),
+}
 
 
 @dataclass(slots=True)
@@ -156,15 +172,36 @@ class DriveClient:
                 return candidate
         raise ApiError(f"could not allocate name for {name}")
 
-    def download_file(self, file_id: str, target_path: Path) -> Path:
-        request = self.service.files().get_media(fileId=file_id, supportsAllDrives=False)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with target_path.open("wb") as handle:
+    def _download_request_for_entry(self, entry: NavEntry):
+        export = EXPORT_MIME_TYPES.get(entry.mime_type)
+        if export is not None:
+            export_mime, _ = export
+            return self.service.files().export_media(fileId=entry.id, mimeType=export_mime)
+        if entry.mime_type.startswith("application/vnd.google-apps."):
+            raise ApiError(f"download not supported for Google file type `{entry.mime_type}`")
+        return self.service.files().get_media(fileId=entry.id, supportsAllDrives=False)
+
+    def _download_target_path(self, entry: NavEntry, target_path: Path) -> Path:
+        export = EXPORT_MIME_TYPES.get(entry.mime_type)
+        if export is None:
+            return target_path
+        _, suffix = export
+        if target_path.suffix.lower() == suffix.lower():
+            return target_path
+        if target_path.suffix:
+            return target_path.with_name(f"{target_path.stem}{suffix}")
+        return target_path.with_name(f"{target_path.name}{suffix}")
+
+    def download_entry(self, entry: NavEntry, target_path: Path) -> Path:
+        request = self._download_request_for_entry(entry)
+        resolved_target = self._download_target_path(entry, target_path)
+        resolved_target.parent.mkdir(parents=True, exist_ok=True)
+        with resolved_target.open("wb") as handle:
             downloader = MediaIoBaseDownload(handle, request)
             done = False
             while not done:
                 _, done = downloader.next_chunk()
-        return target_path
+        return resolved_target
 
     def list_tree(self, root_id: str) -> dict[str, RemoteEntry]:
         result: dict[str, RemoteEntry] = {}

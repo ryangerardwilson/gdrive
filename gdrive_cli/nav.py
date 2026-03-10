@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import curses
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,6 +62,14 @@ class ClipboardState:
             return f"{prefix}{self.entries[0].name}{suffix}"
         prefix = "CUT " if self.cut else ""
         return f"{prefix}{len(self.entries)} items"
+
+
+@dataclass(slots=True)
+class DownloadJob:
+    entry_name: str
+    target_path: Path
+    completed_path: Path | None = None
+    error: str | None = None
 
 
 CHEATSHEET = r"""
@@ -149,6 +159,15 @@ class DriveNavigator:
         self.visual_active_index: int | None = None
         self.last_repeat_sequence: list[int] | None = None
         self.is_repeating = False
+        self._spinner_lock = threading.Lock()
+        self._spinner_message = ""
+        self._spinner_frame = 0
+        self._spinner_stop: threading.Event | None = None
+        self._cut_hidden_ids: set[str] = set()
+        self._cut_hidden_until: float | None = None
+        self._download_lock = threading.Lock()
+        self._active_downloads: dict[str, DownloadJob] = {}
+        self._completed_downloads: list[DownloadJob] = []
         self.stack = [self._load_folder("root", "/")]
 
     @property
@@ -156,13 +175,125 @@ class DriveNavigator:
         return self.stack[-1]
 
     def _load_folder(self, folder_id: str, path: str) -> FolderState:
-        entries = self.client.list_children(folder_id)
+        entries = self._run_with_spinner("loading folder...", lambda: self.client.list_children(folder_id))
         self.children_cache[folder_id] = entries
         return FolderState(folder_id=folder_id, path=path, entries=entries)
 
+    def _render_status_only(self) -> None:
+        if self.show_help:
+            return
+        height, width = self.stdscr.getmaxyx()
+        items = self._display_items()
+        scroll_indicator = ""
+        list_height = max(0, height - 3)
+        if len(items) > list_height and list_height > 0:
+            top = self.current.scroll + 1
+            bottom = min(len(items), self.current.scroll + list_height)
+            scroll_indicator = f"[{top}-{bottom}/{len(items)}]"
+        self._render_line(height - 1, self._compose_status(scroll_indicator=scroll_indicator)[: max(0, width - 1)])
+        self.stdscr.refresh()
+
+    def _spinner_worker(self, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
+            with self._spinner_lock:
+                self._spinner_frame = (self._spinner_frame + 1) % 10
+            try:
+                self._render_status_only()
+            except Exception:
+                pass
+            time.sleep(0.08)
+
+    def _busy_indicator(self) -> str:
+        with self._spinner_lock:
+            message = self._spinner_message
+            frame = self._spinner_frame
+        if not message:
+            return ""
+        dots = "." * ((frame % 3) + 1)
+        pulse = "><>•"[frame % 4]
+        return f"{pulse} {message}{dots}"
+
+    def _download_indicator(self) -> str:
+        with self._download_lock:
+            jobs = list(self._active_downloads.values())
+        if not jobs:
+            return ""
+        frame = int(time.monotonic() * 10) % 4
+        pulse = "><>•"[frame]
+        if len(jobs) == 1:
+            return f"{pulse} dl {jobs[0].entry_name}"
+        return f"{pulse} dl {len(jobs)} files"
+
+    def _run_with_spinner(self, message: str, func):
+        if self._spinner_stop is not None:
+            return func()
+        stop_event = threading.Event()
+        with self._spinner_lock:
+            self._spinner_message = message
+            self._spinner_frame = 0
+            self._spinner_stop = stop_event
+        worker = threading.Thread(target=self._spinner_worker, args=(stop_event,), daemon=True)
+        worker.start()
+        try:
+            return func()
+        finally:
+            stop_event.set()
+            worker.join(timeout=0.2)
+            with self._spinner_lock:
+                self._spinner_message = ""
+                self._spinner_stop = None
+            try:
+                self._render_status_only()
+            except Exception:
+                pass
+
+    def _download_worker(self, job_id: str, entry: NavEntry, target_path: Path) -> None:
+        completed_path: Path | None = None
+        error: str | None = None
+        try:
+            completed_path = self.client.download_entry(entry, target_path)
+        except Exception as exc:
+            error = str(exc)
+        with self._download_lock:
+            job = self._active_downloads.pop(job_id, None)
+            if job is None:
+                return
+            job.completed_path = completed_path
+            job.error = error
+            self._completed_downloads.append(job)
+
+    def _start_download(self, entry: NavEntry) -> None:
+        target_path = _resolve_download_path(self.download_dir, entry.name)
+        job_id = f"{entry.id}:{time.monotonic_ns()}"
+        job = DownloadJob(entry_name=entry.name, target_path=target_path)
+        with self._download_lock:
+            self._active_downloads[job_id] = job
+        worker = threading.Thread(
+            target=self._download_worker,
+            args=(job_id, entry, target_path),
+            daemon=True,
+        )
+        worker.start()
+        self.status_message = f"started download {entry.name}"
+
+    def _poll_background_jobs(self) -> None:
+        with self._download_lock:
+            completed = list(self._completed_downloads)
+            self._completed_downloads.clear()
+        if not completed:
+            return
+        latest = completed[-1]
+        if latest.error:
+            self.status_message = latest.error
+            return
+        self.status_message = f"downloaded {latest.entry_name} -> {latest.completed_path}"
+
     def _display_items(self) -> list[DisplayItem]:
+        self._refresh_cut_overlay()
         items: list[DisplayItem] = []
         for entry in self.current.entries:
+            if self._is_temporarily_hidden(entry.id):
+                continue
             items.append(DisplayItem(entry=entry, depth=0))
             if entry.is_dir and entry.id in self.expanded_ids:
                 self._append_expanded(entry.id, depth=1, items=items)
@@ -171,9 +302,11 @@ class DriveNavigator:
     def _append_expanded(self, folder_id: str, depth: int, items: list[DisplayItem]) -> None:
         children = self.children_cache.get(folder_id)
         if children is None:
-            children = self.client.list_children(folder_id)
+            children = self._run_with_spinner("loading folder...", lambda: self.client.list_children(folder_id))
             self.children_cache[folder_id] = children
         for child in children:
+            if self._is_temporarily_hidden(child.id):
+                continue
             items.append(DisplayItem(entry=child, depth=depth))
             if child.is_dir and child.id in self.expanded_ids:
                 self._append_expanded(child.id, depth + 1, items)
@@ -195,6 +328,21 @@ class DriveNavigator:
         if self.is_repeating:
             return
         self.last_repeat_sequence = list(keys) if keys else None
+
+    def _clear_cut_overlay(self) -> None:
+        self._cut_hidden_ids.clear()
+        self._cut_hidden_until = None
+
+    def _refresh_cut_overlay(self) -> None:
+        if self._cut_hidden_until is None:
+            return
+        if time.monotonic() < self._cut_hidden_until:
+            return
+        self._clear_cut_overlay()
+
+    def _is_temporarily_hidden(self, entry_id: str) -> bool:
+        self._refresh_cut_overlay()
+        return entry_id in self._cut_hidden_ids
 
     def _reload_current_folder(self) -> None:
         current = self.current
@@ -300,6 +448,11 @@ class DriveNavigator:
         action = "Cut" if cut else "Yanked"
         self.status_message = f"{action} {count} {noun} to clipboard"
         self.marked_ids.clear()
+        if cut:
+            self._cut_hidden_ids = {entry.id for entry in entries}
+            self._cut_hidden_until = time.monotonic() + 10.0
+        else:
+            self._clear_cut_overlay()
 
     def _target_folder_id(self) -> str:
         selected = self._selected_entry()
@@ -347,15 +500,16 @@ class DriveNavigator:
         try:
             for entry in list(self.clipboard.entries):
                 if self.clipboard.cut:
-                    self._move_entry(entry, target_parent_id)
+                    self._run_with_spinner(f"moving {entry.name}", lambda entry=entry: self._move_entry(entry, target_parent_id))
                 else:
-                    self._copy_entry_recursive(entry, target_parent_id)
+                    self._run_with_spinner(f"copying {entry.name}", lambda entry=entry: self._copy_entry_recursive(entry, target_parent_id))
             count = self.clipboard.entry_count
             noun = "item" if count == 1 else "items"
             action = "Moved" if self.clipboard.cut else "Pasted"
             self.status_message = f"{action} {count} {noun}"
             if self.clipboard.cut:
                 self.clipboard.clear()
+                self._clear_cut_overlay()
             self._reload_current_folder()
             self._clear_missing_marks()
         except Exception as exc:
@@ -384,7 +538,7 @@ class DriveNavigator:
             return
         try:
             for entry in entries:
-                self.client.delete_entry(entry.id)
+                self._run_with_spinner(f"deleting {entry.name}", lambda entry=entry: self.client.delete_entry(entry.id))
             count = len(entries)
             noun = "item" if count == 1 else "items"
             self.status_message = f"Deleted {count} {noun}"
@@ -477,9 +631,7 @@ class DriveNavigator:
                 self.stack.append(self._load_folder(entry.id, next_path))
                 self.status_message = next_path
                 return
-            target_path = _resolve_download_path(self.download_dir, entry.name)
-            self.client.download_file(entry.id, target_path)
-            self.status_message = f"downloaded {entry.name} -> {target_path}"
+            self._start_download(entry)
         except Exception as exc:
             self.status_message = str(exc)
 
@@ -511,7 +663,7 @@ class DriveNavigator:
                     self.expanded_ids.discard(folder_id)
             self.status_message = f"collapsed {entry.name}"
             return
-        self.children_cache[entry.id] = self.client.list_children(entry.id)
+        self.children_cache[entry.id] = self._run_with_spinner("expanding directory...", lambda: self.client.list_children(entry.id))
         self.expanded_ids.add(entry.id)
         self.status_message = f"expanded {entry.name}"
 
@@ -528,7 +680,7 @@ class DriveNavigator:
             if entry.id in seen:
                 continue
             seen.add(entry.id)
-            children = self.client.list_children(entry.id)
+            children = self._run_with_spinner(f"expanding {entry.name}", lambda entry=entry: self.client.list_children(entry.id))
             self.children_cache[entry.id] = children
             if entry.id not in self.expanded_ids:
                 self.expanded_ids.add(entry.id)
@@ -623,7 +775,7 @@ class DriveNavigator:
                 if handled:
                     self._render_prompt_input(prompt_y, max_x, prompt_display, text, cursor)
         finally:
-            self.stdscr.timeout(-1)
+            self.stdscr.timeout(80)
             if leaveok_changed:
                 try:
                     self.stdscr.leaveok(True)
@@ -650,7 +802,7 @@ class DriveNavigator:
             return
         try:
             unique_name = self.client.find_available_name(entry.parent_id, new_name)
-            self.client.rename_entry(entry.id, unique_name)
+            self._run_with_spinner(f"renaming {entry.name}", lambda: self.client.rename_entry(entry.id, unique_name))
             self.status_message = f"Renamed to {unique_name}"
             self._reload_current_folder()
         except Exception as exc:
@@ -825,6 +977,12 @@ class DriveNavigator:
             parts.append(self.pending_operator)
         if scroll_indicator.strip():
             parts.append(scroll_indicator.strip())
+        busy = self._busy_indicator()
+        if busy:
+            parts.append(busy)
+        download_busy = self._download_indicator()
+        if download_busy:
+            parts.append(download_busy)
         if self.status_message:
             parts.append(self.status_message)
         return "  ".join(parts) if parts else " "
@@ -889,8 +1047,11 @@ class DriveNavigator:
 
     def run(self) -> int:
         while True:
+            self._poll_background_jobs()
             self.render()
             key = self.stdscr.getch()
+            if key == -1:
+                continue
             if self.show_help:
                 lines = len(CHEATSHEET.splitlines())
                 visible_rows = max(1, self.stdscr.getmaxyx()[0] - 1)
@@ -933,6 +1094,7 @@ def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path) -
         stdscr.idlok(True)
     except Exception:
         pass
+    stdscr.timeout(80)
     navigator = DriveNavigator(stdscr=stdscr, client=client, preset=preset, download_dir=download_dir)
     return navigator.run()
 

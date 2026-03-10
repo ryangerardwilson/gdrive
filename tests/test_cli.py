@@ -26,6 +26,7 @@ class CliUsageTests(unittest.TestCase):
         self.assertIn("# <preset> reg <local_dir> <drive_path> and <preset> ls|rm <edit_id>", output)
         self.assertIn("gdrive 1 reg ~/Documents Documents", output)
         self.assertIn("gdrive 1 nav", output)
+        self.assertIn("gdrive conf", output)
         self.assertNotIn("commands:", output)
         self.assertNotIn("usage:", output)
 
@@ -80,6 +81,24 @@ class CliUsageTests(unittest.TestCase):
             code = main(["1", "nav"])
         self.assertEqual(code, 0)
         run_nav.assert_called_once_with("1")
+
+    def test_conf_opens_config_in_visual_then_editor_then_vim(self):
+        with TemporaryDirectory() as tmp:
+            with patch.dict(
+                "os.environ",
+                {
+                    "XDG_CONFIG_HOME": f"{tmp}/config",
+                    "XDG_DATA_HOME": f"{tmp}/data",
+                    "VISUAL": "nvim",
+                },
+                clear=False,
+            ):
+                with patch("subprocess.run") as subprocess_run:
+                    subprocess_run.return_value.returncode = 0
+                    code = main(["conf"])
+            self.assertEqual(code, 0)
+            subprocess_run.assert_called_once()
+            self.assertEqual(subprocess_run.call_args.args[0][0], "nvim")
 
     def test_build_runtime_command_uses_launcher_only_when_frozen(self):
         with patch("sys.executable", "/tmp/gdrive"), patch("sys.frozen", True, create=True):

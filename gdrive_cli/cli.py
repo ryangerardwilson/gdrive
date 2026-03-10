@@ -39,7 +39,7 @@ from .sync import delete_state, sync_registration
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
 PRESET_COMMANDS = {"reg", "ls", "rm", "nav"}
-GLOBAL_COMMANDS = {"run", "ti", "td", "st"}
+GLOBAL_COMMANDS = {"run", "ti", "td", "st", "conf"}
 
 
 def _muted_text(text: str) -> str:
@@ -57,6 +57,7 @@ def compact_usage() -> str:
             "       gdrive <preset> reg <local_dir> <drive_path>",
             "       gdrive <preset> ls",
             "       gdrive <preset> nav",
+            "       gdrive conf",
             "       gdrive run",
             "       gdrive <preset> rm <edit_id>",
             "       gdrive ti",
@@ -93,8 +94,12 @@ def print_help_text() -> None:
         "  # <preset> nav",
         "  gdrive 1 nav",
         "",
+        "  open the config in your editor",
+        "  # conf",
+        "  gdrive conf",
+        "",
         "  run all syncs and manage the hourly sync timer",
-        "  # run|ti|td|st",
+        "  # conf|run|ti|td|st",
         "  gdrive run",
         "  gdrive ti",
     ]
@@ -241,6 +246,13 @@ def auth_account(client_secret_path: str) -> int:
     account = upsert_authenticated_account(client_secret, email, backup_root_name)
     print(f"authorized\t{account.preset}\t{email}\t{account.backup_root_name}")
     return 0
+
+
+def open_config_in_editor() -> int:
+    config = load_config()
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vim"
+    result = subprocess.run([editor, str(config.path)], check=False)
+    return result.returncode
 
 
 def upgrade_app() -> int:
@@ -402,9 +414,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.command is None or args.params:
                 raise CliError("usage: gdrive auth <client_secret_path>")
             return auth_account(args.command)
-        if args.preset in {"run", "ti", "td", "st"}:
+        if args.preset in {"run", "ti", "td", "st", "conf"}:
             if args.command or args.params:
                 raise CliError(f"usage: gdrive {args.preset}")
+            if args.preset == "conf":
+                return open_config_in_editor()
             if args.preset == "run":
                 return run_sync_all()
             if args.preset == "ti":
