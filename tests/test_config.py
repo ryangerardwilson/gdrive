@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from gdrive_cli.config import (
+    HandlerSpec,
+    _normalize_handlers,
     add_registration,
     get_account,
     load_config,
@@ -105,6 +107,42 @@ class ConfigTests(unittest.TestCase):
             save_config(config)
             payload = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertNotIn("download_dir", payload["accounts"]["4"])
+
+    def test_normalize_handlers_supports_object_form(self):
+        handlers = _normalize_handlers(
+            {
+                "pdf_viewer": {"commands": [["zathura"]], "is_internal": False},
+                "csv_viewer": {"command": [["vixl"]], "is_internal": True},
+            }
+        )
+        self.assertEqual(set(handlers), {"pdf_viewer", "csv_viewer"})
+        self.assertIsInstance(handlers["pdf_viewer"], HandlerSpec)
+        self.assertEqual(handlers["pdf_viewer"].commands, [["zathura"]])
+        self.assertFalse(handlers["pdf_viewer"].is_internal)
+        self.assertEqual(handlers["csv_viewer"].commands, [["vixl"]])
+        self.assertTrue(handlers["csv_viewer"].is_internal)
+
+    def test_load_config_preserves_handlers(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "accounts": {},
+                        "handlers": {
+                            "image_viewer": {
+                                "commands": [["swayimg"]],
+                                "is_internal": False,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            self.assertIn("image_viewer", config.handlers)
+            self.assertEqual(config.handlers["image_viewer"].commands, [["swayimg"]])
 
     def test_load_config_migrates_legacy_root_to_preset_one(self):
         with TemporaryDirectory() as tmp:

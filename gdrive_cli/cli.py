@@ -88,7 +88,7 @@ def print_help_text() -> None:
         "  gdrive 1 ls",
         "  gdrive 1 rm abcd1234",
         "",
-        "  browse Drive in a list-style TUI and download files with `l`",
+        "  browse Drive in a list-style TUI; `l` opens through handlers and Enter downloads to cwd",
         "  # <preset> nav",
         "  gdrive 1 nav",
         "",
@@ -202,8 +202,9 @@ def run_nav(preset: str) -> int:
     ensure_client_secret(preset, interactive=True)
     from .nav import browse_drive
 
+    config = load_config()
     client = drive_client(preset)
-    return browse_drive(client=client, preset=preset, download_dir=Path.cwd())
+    return browse_drive(client=client, preset=preset, download_dir=Path.cwd(), handlers=config.handlers)
 
 
 def auth_account(client_secret_path: str) -> int:

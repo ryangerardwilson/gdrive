@@ -65,6 +65,14 @@ Example config:
       "backup_root_name": "Backups",
       "registrations": []
     }
+  },
+  "handlers": {
+    "pdf_viewer": { "commands": [["zathura"]], "is_internal": false },
+    "image_viewer": { "commands": [["swayimg"]], "is_internal": false },
+    "csv_viewer": { "commands": [["vixl"]], "is_internal": true },
+    "xlsx_viewer": { "commands": [["vixl"]], "is_internal": true },
+    "audio_player": { "commands": [["alacritty", "-e", "rlc"]], "is_internal": false },
+    "video_player": { "commands": [["alacritty", "-e", "ffplay", "-nodisp", "-autoexit"]], "is_internal": false }
   }
 }
 ```
@@ -102,7 +110,9 @@ Notes:
 - Each preset is an independent Google account setup with its own OAuth token, backup root, and registrations.
 - `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
 - Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
-- `nav` downloads files into the current working directory from which you launched `gdrive`.
+- `nav` uses `l` to download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
+- `nav` uses `Enter` to download a file into the current working directory from which you launched `gdrive`.
+- `handlers` use the same object form as `o`: `commands` is a list of commands to try, `{file}` is substituted if present, and `is_internal: true` runs the handler in the current terminal after suspending the TUI.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
 - `run` is global. It syncs every registration across every configured preset.

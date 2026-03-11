@@ -7,24 +7,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .errors import ApiError
-
-FOLDER_MIME = "application/vnd.google-apps.folder"
-EXPORT_MIME_TYPES: dict[str, tuple[str, str]] = {
-    "application/vnd.google-apps.document": (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".docx",
-    ),
-    "application/vnd.google-apps.spreadsheet": (
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".xlsx",
-    ),
-    "application/vnd.google-apps.presentation": (
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ".pptx",
-    ),
-    "application/vnd.google-apps.drawing": ("image/png", ".png"),
-    "application/vnd.google-apps.script": ("application/vnd.google-apps.script+json", ".json"),
-}
+from .drive_types import EXPORT_MIME_TYPES, FOLDER_MIME
 
 
 @dataclass(slots=True)

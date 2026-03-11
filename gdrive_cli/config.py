@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,13 +30,71 @@ class AccountConfig:
 
 
 @dataclass(slots=True)
+class HandlerSpec:
+    commands: list[list[str]] = field(default_factory=list)
+    is_internal: bool = False
+
+
+@dataclass(slots=True)
 class AppConfig:
     path: Path
     accounts: dict[str, AccountConfig]
+    handlers: dict[str, HandlerSpec] = field(default_factory=dict)
 
 
 def _sorted_accounts(accounts: dict[str, AccountConfig]) -> dict[str, AccountConfig]:
     return dict(sorted(accounts.items(), key=lambda item: (int(item[0]) if item[0].isdigit() else item[0])))
+
+
+def _normalize_command(entry: Any) -> list[str]:
+    if isinstance(entry, str):
+        return shlex.split(entry) if entry.strip() else []
+    if isinstance(entry, list) and all(isinstance(token, str) for token in entry):
+        return [token for token in entry if token]
+    return []
+
+
+def _normalize_handler_commands(raw_value: Any) -> list[list[str]]:
+    commands: list[list[str]] = []
+    if isinstance(raw_value, list):
+        if raw_value and all(isinstance(entry, str) for entry in raw_value):
+            command = _normalize_command(raw_value)
+            if command:
+                commands.append(command)
+        else:
+            for entry in raw_value:
+                command = _normalize_command(entry)
+                if command:
+                    commands.append(command)
+    else:
+        command = _normalize_command(raw_value)
+        if command:
+            commands.append(command)
+    return commands
+
+
+def _normalize_handlers(raw_handlers: Any) -> dict[str, HandlerSpec]:
+    handlers: dict[str, HandlerSpec] = {}
+    if not isinstance(raw_handlers, dict):
+        return handlers
+    for raw_key, raw_value in raw_handlers.items():
+        key = raw_key.strip() if isinstance(raw_key, str) else ""
+        if not key:
+            continue
+        commands: list[list[str]] = []
+        is_internal = False
+        if isinstance(raw_value, dict):
+            commands_value = raw_value.get("commands")
+            if commands_value is None and "command" in raw_value:
+                commands_value = raw_value.get("command")
+            commands = _normalize_handler_commands(commands_value)
+            is_internal = bool(raw_value.get("is_internal"))
+        else:
+            commands = _normalize_handler_commands(raw_value)
+        if not commands:
+            continue
+        handlers[key] = HandlerSpec(commands=commands, is_internal=is_internal)
+    return handlers
 
 
 def resolve_config_path() -> Path:
@@ -126,6 +185,7 @@ def _migrate_legacy_root(raw: dict[str, Any]) -> dict[str, Any]:
     if "accounts" in raw and isinstance(raw.get("accounts"), dict):
         return raw
     return {
+        "handlers": raw.get("handlers", {}),
         "accounts": {
             "1": {
                 "client_secret_file": raw.get("client_secret_file"),
@@ -155,7 +215,11 @@ def load_config(path: Path | None = None) -> AppConfig:
     for preset, account_raw in accounts_raw.items():
         preset_key = _normalize_preset(str(preset))
         accounts[preset_key] = _account_from_raw(preset_key, account_raw)
-    return AppConfig(path=config_path, accounts=_sorted_accounts(accounts))
+    return AppConfig(
+        path=config_path,
+        accounts=_sorted_accounts(accounts),
+        handlers=_normalize_handlers(raw.get("handlers", {})),
+    )
 
 
 def _serialize_config(config: AppConfig) -> dict[str, Any]:
@@ -179,7 +243,14 @@ def _serialize_config(config: AppConfig) -> dict[str, Any]:
                 )
             ],
         }
-    return {"accounts": accounts_payload}
+    handlers_payload = {
+        name: {
+            "commands": spec.commands,
+            "is_internal": spec.is_internal,
+        }
+        for name, spec in sorted(config.handlers.items())
+    }
+    return {"accounts": accounts_payload, "handlers": handlers_payload}
 
 
 def save_config(config: AppConfig) -> None:

@@ -73,13 +73,20 @@ class CliUsageTests(unittest.TestCase):
             cwd = Path(tmp)
             browse_drive = MagicMock(return_value=0)
             with patch("gdrive_cli.cli.ensure_client_secret"), patch(
+                "gdrive_cli.cli.load_config", return_value=SimpleNamespace(handlers={"pdf_viewer": object()})
+            ), patch(
                 "gdrive_cli.cli.drive_client", return_value=object()
             ), patch("gdrive_cli.cli.Path.cwd", return_value=cwd), patch.dict(
                 "sys.modules", {"gdrive_cli.nav": SimpleNamespace(browse_drive=browse_drive)}
             ):
                 code = run_nav("1")
         self.assertEqual(code, 0)
-        browse_drive.assert_called_once_with(client=unittest.mock.ANY, preset="1", download_dir=cwd)
+        browse_drive.assert_called_once_with(
+            client=unittest.mock.ANY,
+            preset="1",
+            download_dir=cwd,
+            handlers={"pdf_viewer": unittest.mock.ANY},
+        )
 
     def test_conf_opens_config_in_visual_then_editor_then_vim(self):
         with TemporaryDirectory() as tmp:

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import curses
+import os
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import HandlerSpec
 from .drive_api import DriveClient, NavEntry
+from .file_handlers import resolve_download_name, select_handler_spec
 
 
 @dataclass(slots=True)
@@ -77,9 +83,9 @@ GDRIVE NAV CHEATSHEET
 
 Navigation
   h               Parent directory
-  l               Enter directory or download file
+  l               Enter directory or open file through handlers
   j / k           Down / Up
-  Enter           Enter directory or download file
+  Enter           Enter directory or download file to cwd
   Esc             Exit visual mode, or quit when visual mode is off
 
 Clipboard & Multi Operations
@@ -139,11 +145,19 @@ def _resolve_download_path(download_dir: Path, name: str) -> Path:
 
 
 class DriveNavigator:
-    def __init__(self, stdscr, client: DriveClient, preset: str, download_dir: Path):
+    def __init__(
+        self,
+        stdscr,
+        client: DriveClient,
+        preset: str,
+        download_dir: Path,
+        handlers: dict[str, HandlerSpec],
+    ):
         self.stdscr = stdscr
         self.client = client
         self.preset = preset
         self.download_dir = download_dir
+        self.handlers = handlers
         self.status_message = f"download dir {self._pretty_path(download_dir)}"
         self.show_help = False
         self.help_scroll = 0
@@ -262,8 +276,12 @@ class DriveNavigator:
             job.error = error
             self._completed_downloads.append(job)
 
+    def _download_target_path(self, base_dir: Path, entry: NavEntry) -> Path:
+        filename = resolve_download_name(entry.name, entry.mime_type)
+        return _resolve_download_path(base_dir, filename)
+
     def _start_download(self, entry: NavEntry) -> None:
-        target_path = _resolve_download_path(self.download_dir, entry.name)
+        target_path = self._download_target_path(self.download_dir, entry)
         job_id = f"{entry.id}:{time.monotonic_ns()}"
         job = DownloadJob(entry_name=entry.name, target_path=target_path)
         with self._download_lock:
@@ -287,6 +305,168 @@ class DriveNavigator:
             self.status_message = latest.error
             return
         self.status_message = f"downloaded {latest.entry_name} -> {latest.completed_path}"
+
+    def _expand_command(self, raw_cmd: list[str], filepath: str) -> list[str] | None:
+        if not raw_cmd:
+            return None
+        tokens: list[str] = []
+        has_placeholder = False
+        for part in raw_cmd:
+            replaced = part.replace("{file}", filepath)
+            if replaced != part:
+                has_placeholder = True
+            tokens.append(replaced)
+        if not tokens:
+            return None
+        if not has_placeholder:
+            tokens.append(filepath)
+        return tokens
+
+    def _run_external_handlers(self, handlers: list[list[str]], filepath: str, *, background: bool) -> bool:
+        for raw_cmd in handlers:
+            tokens = self._expand_command(raw_cmd, filepath)
+            if not tokens:
+                continue
+            if shutil.which(tokens[0]) is None:
+                continue
+            try:
+                if background:
+                    subprocess.Popen(
+                        tokens,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        preexec_fn=os.setsid,
+                    )
+                else:
+                    self._suspend_curses()
+                    try:
+                        return_code = subprocess.call(tokens)
+                    finally:
+                        self._resume_curses()
+                    if return_code != 0:
+                        self.status_message = f"handler failed: {tokens[0]}"
+                        curses.flash()
+                        return True
+                return True
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+        return False
+
+    def _run_internal_handler(self, handlers: list[list[str]], filepath: str) -> bool:
+        attempted = False
+        last_cmd = ""
+        self._suspend_curses()
+        try:
+            for raw_cmd in handlers:
+                tokens = self._expand_command(raw_cmd, filepath)
+                if not tokens:
+                    continue
+                if shutil.which(tokens[0]) is None:
+                    continue
+                attempted = True
+                last_cmd = tokens[0]
+                try:
+                    return_code = subprocess.call(tokens)
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    continue
+                if return_code == 0:
+                    self.status_message = f"handler exited: {tokens[0]}"
+                    return True
+                self.status_message = f"handler failed: {tokens[0]}"
+                curses.flash()
+                return True
+        finally:
+            self._resume_curses()
+        if attempted:
+            self.status_message = f"handler failed: {last_cmd or 'handler'}"
+            curses.flash()
+            return True
+        return False
+
+    def _suspend_curses(self) -> None:
+        try:
+            curses.def_prog_mode()
+        except curses.error:
+            pass
+        try:
+            curses.endwin()
+        except curses.error:
+            pass
+
+    def _resume_curses(self) -> None:
+        try:
+            curses.reset_prog_mode()
+        except curses.error:
+            pass
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        try:
+            self.stdscr.refresh()
+        except Exception:
+            pass
+
+    def _invoke_handler(self, spec: HandlerSpec, filepath: Path, *, default_strategy: str) -> bool:
+        if not spec.commands:
+            return False
+        if spec.is_internal:
+            return self._run_internal_handler(spec.commands, str(filepath))
+        if default_strategy == "external_background":
+            return self._run_external_handlers(spec.commands, str(filepath), background=True)
+        return self._run_external_handlers(spec.commands, str(filepath), background=False)
+
+    def _open_with_vim(self, filepath: Path) -> bool:
+        if shutil.which("vim") is None:
+            return False
+        self._suspend_curses()
+        try:
+            subprocess.call(["vim", str(filepath)])
+            return True
+        except Exception:
+            return False
+        finally:
+            self._resume_curses()
+
+    def _open_downloaded_file(self, path: Path) -> bool:
+        spec, default_strategy, is_text_like = select_handler_spec(self.handlers, path)
+        handled = False
+        try:
+            handled = self._invoke_handler(spec, path, default_strategy=default_strategy)
+        except FileNotFoundError:
+            handled = False
+        if not handled and is_text_like:
+            handled = self._open_with_vim(path)
+        return handled
+
+    def _open_selected(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            self.status_message = "empty folder"
+            return
+        try:
+            if entry.is_dir:
+                self._enter()
+                return
+            temp_dir = Path(tempfile.mkdtemp(prefix="gdrive-nav-"))
+            target_path = self._download_target_path(temp_dir, entry)
+            resolved_path = self._run_with_spinner(
+                f"downloading {entry.name}",
+                lambda: self.client.download_entry(entry, target_path),
+            )
+            if self._open_downloaded_file(resolved_path):
+                if not self.status_message.startswith("handler failed:"):
+                    self.status_message = f"opened {entry.name}"
+            else:
+                self.status_message = f"no handler configured; temp file kept at {resolved_path}"
+                curses.flash()
+        except Exception as exc:
+            self.status_message = str(exc)
 
     def _display_items(self) -> list[DisplayItem]:
         self._refresh_cut_overlay()
@@ -890,7 +1070,11 @@ class DriveNavigator:
             self._clear_operator()
             self._back()
             return False
-        if key in (ord("l"), curses.KEY_RIGHT, 10, 13):
+        if key in (ord("l"), curses.KEY_RIGHT):
+            self._clear_operator()
+            self._open_selected()
+            return False
+        if key in (10, 13, curses.KEY_ENTER):
             self._clear_operator()
             self._enter()
             return False
@@ -1075,7 +1259,7 @@ class DriveNavigator:
                 return 0
 
 
-def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path) -> int:
+def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path, handlers: dict[str, HandlerSpec]) -> int:
     curses.curs_set(0)
     try:
         curses.noecho()
@@ -1095,9 +1279,9 @@ def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path) -
     except Exception:
         pass
     stdscr.timeout(80)
-    navigator = DriveNavigator(stdscr=stdscr, client=client, preset=preset, download_dir=download_dir)
+    navigator = DriveNavigator(stdscr=stdscr, client=client, preset=preset, download_dir=download_dir, handlers=handlers)
     return navigator.run()
 
 
-def browse_drive(client: DriveClient, preset: str, download_dir: Path) -> int:
-    return curses.wrapper(lambda stdscr: _curses_main(stdscr, client, preset, download_dir))
+def browse_drive(client: DriveClient, preset: str, download_dir: Path, handlers: dict[str, HandlerSpec]) -> int:
+    return curses.wrapper(lambda stdscr: _curses_main(stdscr, client, preset, download_dir, handlers))
