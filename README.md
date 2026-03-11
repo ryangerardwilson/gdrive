@@ -117,7 +117,7 @@ Notes:
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
 - `run` is global. It syncs every registration across every configured preset.
 - `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
-- `-v` prints the installed app version from the app's single release version source.
+- `-v` prints the installed app version from the app's runtime version module. Source checkouts may keep a placeholder value until release automation stamps the shipped artifact.
 - The local folder is authoritative. If you remove a local file, the matching Drive file is removed on the next sync.
 - If a file is renamed locally without content changes, the CLI attempts to propagate it as a Drive rename/move by matching the prior snapshot.
 - Remote files created manually inside a managed Drive folder are deleted on the next sync if they do not exist locally.
