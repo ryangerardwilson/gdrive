@@ -12,7 +12,6 @@ from gdrive_cli.config import (
     normalize_relative_drive_path,
     set_backup_root_name,
     set_client_secret,
-    set_download_dir,
 )
 from gdrive_cli.errors import CliError
 
@@ -76,22 +75,36 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(CliError):
             normalize_relative_drive_path("Backups/Documents", "Backups")
 
-    def test_set_download_dir_creates_and_saves_path(self):
+    def test_load_config_ignores_legacy_download_dir_and_drops_it_on_save(self):
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            with patch.dict(
-                "os.environ",
-                {
-                    "XDG_CONFIG_HOME": str(tmp_path / "config"),
-                    "XDG_DATA_HOME": str(tmp_path / "data"),
-                },
-                clear=False,
-            ):
-                value = set_download_dir("4", str(tmp_path / "downloads"))
-                config = load_config()
-                account = get_account(config, "4")
-                self.assertTrue(value.is_dir())
-                self.assertEqual(account.download_dir, value)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "accounts": {
+                            "4": {
+                                "client_secret_file": "",
+                                "email": "",
+                                "backup_root_name": "Backups",
+                                "download_dir": str(tmp_path / "downloads"),
+                                "registrations": [],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+            account = get_account(config, "4")
+            self.assertEqual(account.backup_root_name, "Backups")
+            self.assertFalse(hasattr(account, "download_dir"))
+            config.path = config_path
+            from gdrive_cli.config import save_config
+
+            save_config(config)
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertNotIn("download_dir", payload["accounts"]["4"])
 
     def test_load_config_migrates_legacy_root_to_preset_one(self):
         with TemporaryDirectory() as tmp:

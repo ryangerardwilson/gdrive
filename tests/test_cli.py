@@ -1,15 +1,16 @@
 import unittest
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from gdrive_cli.cli import (
     _build_runtime_command,
     ensure_backup_root_name,
     ensure_client_secret,
-    ensure_download_dir,
     main,
+    run_nav,
     write_timer_units,
 )
 
@@ -61,26 +62,24 @@ class CliUsageTests(unittest.TestCase):
                     with patch("builtins.input", return_value=secret_path):
                         self.assertEqual(str(ensure_client_secret("2", interactive=True)), secret_path)
 
-    def test_ensure_download_dir_prompts_and_saves_for_preset(self):
-        with TemporaryDirectory() as tmp:
-            with patch.dict(
-                "os.environ",
-                {
-                    "XDG_CONFIG_HOME": f"{tmp}/config",
-                    "XDG_DATA_HOME": f"{tmp}/data",
-                },
-                clear=False,
-            ):
-                expected = Path(tmp) / "Downloads"
-                with patch("sys.stdin.isatty", return_value=True):
-                    with patch("builtins.input", return_value=str(expected)):
-                        self.assertEqual(ensure_download_dir("2", interactive=True), expected.resolve())
-
     def test_nav_dispatches_to_run_nav(self):
         with patch("gdrive_cli.cli.run_nav", return_value=0) as run_nav:
             code = main(["1", "nav"])
         self.assertEqual(code, 0)
         run_nav.assert_called_once_with("1")
+
+    def test_run_nav_uses_current_working_directory_for_downloads(self):
+        with TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            browse_drive = MagicMock(return_value=0)
+            with patch("gdrive_cli.cli.ensure_client_secret"), patch(
+                "gdrive_cli.cli.drive_client", return_value=object()
+            ), patch("gdrive_cli.cli.Path.cwd", return_value=cwd), patch.dict(
+                "sys.modules", {"gdrive_cli.nav": SimpleNamespace(browse_drive=browse_drive)}
+            ):
+                code = run_nav("1")
+        self.assertEqual(code, 0)
+        browse_drive.assert_called_once_with(client=unittest.mock.ANY, preset="1", download_dir=cwd)
 
     def test_conf_opens_config_in_visual_then_editor_then_vim(self):
         with TemporaryDirectory() as tmp:

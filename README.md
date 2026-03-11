@@ -102,6 +102,7 @@ Notes:
 - Each preset is an independent Google account setup with its own OAuth token, backup root, and registrations.
 - `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
 - Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
+- `nav` downloads files into the current working directory from which you launched `gdrive`.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
 - `run` is global. It syncs every registration across every configured preset.

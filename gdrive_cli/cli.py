@@ -25,10 +25,8 @@ from .config import (
     remove_registration,
     require_backup_root_name,
     require_client_secret,
-    require_download_dir,
     set_backup_root_name,
     set_client_secret,
-    set_download_dir,
     upsert_authenticated_account,
     update_registration,
 )
@@ -163,28 +161,6 @@ def ensure_setup(preset: str, interactive: bool) -> tuple[Path, str]:
     return client_secret, backup_root_name
 
 
-def prompt_download_dir(preset: str) -> Path:
-    while True:
-        value = input(f"Preset {preset} download dir path: ").strip()
-        if not value:
-            print("enter a directory path like `~/Downloads`", file=sys.stderr)
-            continue
-        try:
-            return set_download_dir(preset, value)
-        except CliError as exc:
-            print(str(exc), file=sys.stderr)
-
-
-def ensure_download_dir(preset: str, interactive: bool) -> Path:
-    config = load_config()
-    account = ensure_account(config, preset)
-    if account.download_dir:
-        return require_download_dir(account)
-    if not interactive or not sys.stdin.isatty():
-        raise CliError(f"missing download dir in config for preset `{preset}`: run `gdrive {preset} nav` interactively first")
-    return prompt_download_dir(preset)
-
-
 def print_registrations(preset: str) -> int:
     account = get_account(load_config(), preset)
     root_name = require_backup_root_name(account)
@@ -224,11 +200,10 @@ def drive_client(preset: str):
 
 def run_nav(preset: str) -> int:
     ensure_client_secret(preset, interactive=True)
-    download_dir = ensure_download_dir(preset, interactive=True)
     from .nav import browse_drive
 
     client = drive_client(preset)
-    return browse_drive(client=client, preset=preset, download_dir=download_dir)
+    return browse_drive(client=client, preset=preset, download_dir=Path.cwd())
 
 
 def auth_account(client_secret_path: str) -> int:
