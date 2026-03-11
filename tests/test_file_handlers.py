@@ -21,6 +21,15 @@ class FileHandlerTests(unittest.TestCase):
         self.assertEqual(strategy, "external_background")
         self.assertFalse(is_text_like)
 
+    def test_select_handler_spec_uses_terminal_strategy_for_csv(self):
+        spec, strategy, is_text_like = select_handler_spec(
+            {"csv_viewer": HandlerSpec(commands=[["vixl"]], is_internal=False)},
+            Path("/tmp/data.csv"),
+        )
+        self.assertEqual(spec.commands, [["vixl"]])
+        self.assertEqual(strategy, "terminal")
+        self.assertFalse(is_text_like)
+
     def test_select_handler_spec_marks_text_files_for_editor_fallback(self):
         spec, strategy, is_text_like = select_handler_spec({}, Path("/tmp/readme.md"))
         self.assertEqual(spec.commands, [])

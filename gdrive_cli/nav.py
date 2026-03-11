@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import curses
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -339,11 +340,7 @@ class DriveNavigator:
                         preexec_fn=os.setsid,
                     )
                 else:
-                    self._suspend_curses()
-                    try:
-                        return_code = subprocess.call(tokens)
-                    finally:
-                        self._resume_curses()
+                    return_code = subprocess.call(tokens)
                     if return_code != 0:
                         self.status_message = f"handler failed: {tokens[0]}"
                         curses.flash()
@@ -388,6 +385,47 @@ class DriveNavigator:
             return True
         return False
 
+    def _open_terminal(self, command: list[str]) -> bool:
+        commands: list[list[str]] = []
+        terminal_env = os.environ.get("TERMINAL")
+        if terminal_env:
+            commands.append(shlex.split(terminal_env))
+        commands.extend([[name] for name in ("alacritty", "foot", "kitty", "wezterm", "gnome-terminal", "xterm")])
+        for raw_cmd in commands:
+            if not raw_cmd:
+                continue
+            if shutil.which(raw_cmd[0]) is None:
+                continue
+            launch_cmd = list(raw_cmd)
+            if any("{cmd}" in token for token in launch_cmd):
+                launch_cmd = [token.replace("{cmd}", " ".join(command)) for token in launch_cmd]
+            else:
+                launch_cmd.extend(["-e", *command])
+            try:
+                subprocess.Popen(
+                    launch_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    preexec_fn=os.setsid,
+                )
+                self.status_message = f"opened terminal: {launch_cmd[0]}"
+                return True
+            except Exception:
+                continue
+        self.status_message = "no terminal found"
+        curses.flash()
+        return False
+
+    def _run_terminal_handlers(self, handlers: list[list[str]], filepath: str) -> bool:
+        for raw_cmd in handlers:
+            tokens = self._expand_command(raw_cmd, filepath)
+            if not tokens:
+                continue
+            if self._open_terminal(tokens):
+                return True
+        return False
+
     def _suspend_curses(self) -> None:
         try:
             curses.def_prog_mode()
@@ -417,6 +455,8 @@ class DriveNavigator:
             return False
         if spec.is_internal:
             return self._run_internal_handler(spec.commands, str(filepath))
+        if default_strategy == "terminal":
+            return self._run_terminal_handlers(spec.commands, str(filepath))
         if default_strategy == "external_background":
             return self._run_external_handlers(spec.commands, str(filepath), background=True)
         return self._run_external_handlers(spec.commands, str(filepath), background=False)
@@ -460,8 +500,7 @@ class DriveNavigator:
                 lambda: self.client.download_entry(entry, target_path),
             )
             if self._open_downloaded_file(resolved_path):
-                if not self.status_message.startswith("handler failed:"):
-                    self.status_message = f"opened {entry.name}"
+                return
             else:
                 self.status_message = f"no handler configured; temp file kept at {resolved_path}"
                 curses.flash()
