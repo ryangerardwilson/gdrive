@@ -87,6 +87,7 @@ gdrive -u
 gdrive auth <client_secret_path>
 gdrive <preset> reg <local_dir> <drive_path>
 gdrive <preset> ls
+gdrive <preset> up <file_path> <file_path> ...
 gdrive run
 gdrive <preset> rm <edit_id>
 gdrive ti
@@ -100,6 +101,7 @@ Examples:
 python main.py auth ~/Documents/credentials/client_secret.json
 python main.py 1 reg ~/Documents "Documents"
 python main.py 2 reg ~/Pictures "Pictures"
+python main.py 1 up ~/Downloads/report.pdf ~/Pictures
 python main.py -v
 python main.py 1 ls
 python main.py run
@@ -110,8 +112,10 @@ Notes:
 - Each preset is an independent Google account setup with its own OAuth token, backup root, and registrations.
 - `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
 - Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
-- `nav` uses `l` to download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
+- `nav` uses `l` to enter directories or download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
 - `nav` uses `Enter` to download a file into the current working directory from which you launched `gdrive`.
+- In normal `nav`, pressing `Enter` on a directory downloads that directory to the current working directory as a `.zip`.
+- `up <file_path> ...` opens the same navigator in upload-picker mode; press `Enter` on a directory to upload there, or on a file to upload into that file's parent directory.
 - `handlers` use the same object form as `o`: `commands` is a list of commands to try, `{file}` is substituted if present, and `is_internal: true` runs the handler in the current terminal after suspending the TUI.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.

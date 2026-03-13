@@ -33,10 +33,11 @@ from .config import (
 from .errors import CliError
 from .paths import ensure_dirs
 from .sync import delete_state, sync_registration
+from .transfer import normalize_upload_paths
 
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
-PRESET_COMMANDS = {"reg", "ls", "rm", "nav"}
+PRESET_COMMANDS = {"reg", "ls", "rm", "nav", "up"}
 GLOBAL_COMMANDS = {"run", "ti", "td", "st", "conf"}
 
 
@@ -55,6 +56,7 @@ def compact_usage() -> str:
             "       gdrive <preset> reg <local_dir> <drive_path>",
             "       gdrive <preset> ls",
             "       gdrive <preset> nav",
+            "       gdrive <preset> up <file_path> <file_path> ...",
             "       gdrive conf",
             "       gdrive run",
             "       gdrive <preset> rm <edit_id>",
@@ -88,9 +90,13 @@ def print_help_text() -> None:
         "  gdrive 1 ls",
         "  gdrive 1 rm abcd1234",
         "",
-        "  browse Drive in a list-style TUI; `l` opens through handlers and Enter downloads to cwd",
+        "  browse Drive in a list-style TUI; `l` enters dirs or opens files, Enter downloads files and zips dirs to cwd",
         "  # <preset> nav",
         "  gdrive 1 nav",
+        "",
+        "  upload local files or folders by picking the target Drive directory in nav mode",
+        "  # <preset> up <file_path> <file_path> ...",
+        "  gdrive 1 up ~/Downloads/report.pdf ~/Pictures",
         "",
         "  open the config in your editor",
         "  # conf",
@@ -205,6 +211,29 @@ def run_nav(preset: str) -> int:
     config = load_config()
     client = drive_client(preset)
     return browse_drive(client=client, preset=preset, download_dir=Path.cwd(), handlers=config.handlers)
+
+
+def run_upload_picker(preset: str, values: list[str]) -> int:
+    ensure_client_secret(preset, interactive=True)
+    from .nav import upload_with_picker
+
+    upload_paths = normalize_upload_paths(values)
+    config = load_config()
+    client = drive_client(preset)
+    result = upload_with_picker(
+        client=client,
+        preset=preset,
+        download_dir=Path.cwd(),
+        handlers=config.handlers,
+        upload_paths=upload_paths,
+    )
+    if result.upload_summary is None:
+        print("cancelled")
+        return 0
+    print(
+        f"uploaded\tfiles={result.upload_summary.files_uploaded}\tdirs={result.upload_summary.dirs_created}\ttarget={result.upload_target_path}"
+    )
+    return 0
 
 
 def auth_account(client_secret_path: str) -> int:
@@ -427,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
             if params:
                 raise CliError("usage: gdrive <preset> nav")
             return run_nav(preset)
+        if args.command == "up":
+            return run_upload_picker(preset, params)
         print(compact_usage())
         return 1
     except CliError as exc:

@@ -14,6 +14,7 @@ from pathlib import Path
 from .config import HandlerSpec
 from .drive_api import DriveClient, NavEntry
 from .file_handlers import resolve_download_name, select_handler_spec
+from .transfer import UploadSummary, download_directory_as_zip, upload_local_paths
 
 
 @dataclass(slots=True)
@@ -29,6 +30,7 @@ class FolderState:
 class DisplayItem:
     entry: NavEntry
     depth: int
+    path: str
 
 
 @dataclass(slots=True)
@@ -79,6 +81,14 @@ class DownloadJob:
     error: str | None = None
 
 
+@dataclass(slots=True)
+class NavigatorResult:
+    exit_code: int = 0
+    upload_summary: UploadSummary | None = None
+    upload_target_path: str | None = None
+    cancelled: bool = False
+
+
 CHEATSHEET = r"""
 GDRIVE NAV CHEATSHEET
 
@@ -86,7 +96,7 @@ Navigation
   h               Parent directory
   l               Enter directory or open file through handlers
   j / k           Down / Up
-  Enter           Enter directory or download file to cwd
+  Enter           Download file to cwd, zip directories to cwd, or confirm upload target in up mode
   Esc             Exit visual mode, or quit when visual mode is off
 
 Clipboard & Multi Operations
@@ -153,13 +163,21 @@ class DriveNavigator:
         preset: str,
         download_dir: Path,
         handlers: dict[str, HandlerSpec],
+        upload_paths: list[Path] | None = None,
     ):
         self.stdscr = stdscr
         self.client = client
         self.preset = preset
         self.download_dir = download_dir
         self.handlers = handlers
-        self.status_message = f"download dir {self._pretty_path(download_dir)}"
+        self.upload_paths = list(upload_paths or [])
+        self.upload_mode = bool(self.upload_paths)
+        if self.upload_mode:
+            count = len(self.upload_paths)
+            noun = "item" if count == 1 else "items"
+            self.status_message = f"choose upload destination and press Enter ({count} {noun})"
+        else:
+            self.status_message = f"download dir {self._pretty_path(download_dir)}"
         self.show_help = False
         self.help_scroll = 0
         self.marked_ids: set[str] = set()
@@ -183,6 +201,7 @@ class DriveNavigator:
         self._download_lock = threading.Lock()
         self._active_downloads: dict[str, DownloadJob] = {}
         self._completed_downloads: list[DownloadJob] = []
+        self.result = NavigatorResult()
         self.stack = [self._load_folder("root", "/")]
 
     @property
@@ -484,6 +503,42 @@ class DriveNavigator:
             handled = self._open_with_vim(path)
         return handled
 
+    def _selection_target_folder(self) -> tuple[str, str]:
+        selected_item = self._selected_item()
+        if selected_item is None:
+            return self.current.folder_id, self.current.path
+        if selected_item.entry.is_dir:
+            return selected_item.entry.id, selected_item.path
+        return selected_item.entry.parent_id or self.current.folder_id, self._parent_path(selected_item.path)
+
+    def _confirm_upload_target(self) -> bool:
+        target_folder_id, target_folder_path = self._selection_target_folder()
+        try:
+            summary = self._run_with_spinner(
+                f"uploading to {target_folder_path}",
+                lambda: upload_local_paths(self.client, target_folder_id, self.upload_paths),
+            )
+        except Exception as exc:
+            self.status_message = str(exc)
+            return False
+        self.result.upload_summary = summary
+        self.result.upload_target_path = target_folder_path
+        self.status_message = f"uploaded to {target_folder_path}"
+        return True
+
+    def _enter_directory(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            self.status_message = "empty folder"
+            return
+        if not entry.is_dir:
+            self.status_message = "select a directory"
+            return
+        self._exit_visual_mode()
+        next_path = "/" if self.current.path == "/" and not entry.name else f"{self.current.path.rstrip('/')}/{entry.name}"
+        self.stack.append(self._load_folder(entry.id, next_path))
+        self.status_message = next_path
+
     def _open_selected(self) -> None:
         entry = self._selected_entry()
         if entry is None:
@@ -491,7 +546,7 @@ class DriveNavigator:
             return
         try:
             if entry.is_dir:
-                self._enter()
+                self._enter_directory()
                 return
             temp_dir = Path(tempfile.mkdtemp(prefix="gdrive-nav-"))
             target_path = self._download_target_path(temp_dir, entry)
@@ -513,12 +568,13 @@ class DriveNavigator:
         for entry in self.current.entries:
             if self._is_temporarily_hidden(entry.id):
                 continue
-            items.append(DisplayItem(entry=entry, depth=0))
+            entry_path = self._join_path(self.current.path, entry.name)
+            items.append(DisplayItem(entry=entry, depth=0, path=entry_path))
             if entry.is_dir and entry.id in self.expanded_ids:
-                self._append_expanded(entry.id, depth=1, items=items)
+                self._append_expanded(entry.id, entry_path, depth=1, items=items)
         return items
 
-    def _append_expanded(self, folder_id: str, depth: int, items: list[DisplayItem]) -> None:
+    def _append_expanded(self, folder_id: str, parent_path: str, depth: int, items: list[DisplayItem]) -> None:
         children = self.children_cache.get(folder_id)
         if children is None:
             children = self._run_with_spinner("loading folder...", lambda: self.client.list_children(folder_id))
@@ -526,17 +582,35 @@ class DriveNavigator:
         for child in children:
             if self._is_temporarily_hidden(child.id):
                 continue
-            items.append(DisplayItem(entry=child, depth=depth))
+            child_path = self._join_path(parent_path, child.name)
+            items.append(DisplayItem(entry=child, depth=depth, path=child_path))
             if child.is_dir and child.id in self.expanded_ids:
-                self._append_expanded(child.id, depth + 1, items)
+                self._append_expanded(child.id, child_path, depth + 1, items)
 
-    def _selected_entry(self) -> NavEntry | None:
+    @staticmethod
+    def _join_path(parent: str, name: str) -> str:
+        if parent == "/":
+            return f"/{name}"
+        return f"{parent.rstrip('/')}/{name}"
+
+    @staticmethod
+    def _parent_path(path: str) -> str:
+        if path == "/":
+            return "/"
+        parent = path.rsplit("/", 1)[0]
+        return parent or "/"
+
+    def _selected_item(self) -> DisplayItem | None:
         items = self._display_items()
         if not items:
             return None
         index = max(0, min(self.current.selected, len(items) - 1))
         self.current.selected = index
-        return items[index].entry
+        return items[index]
+
+    def _selected_entry(self) -> NavEntry | None:
+        item = self._selected_item()
+        return item.entry if item else None
 
     def _clear_operator(self) -> None:
         self.pending_operator = None
@@ -838,17 +912,19 @@ class DriveNavigator:
         self.stdscr.move(prompt_y, cursor_screen_x)
         self.stdscr.refresh()
 
-    def _enter(self) -> None:
+    def _download_selected_to_pwd(self) -> None:
         entry = self._selected_entry()
         if entry is None:
             self.status_message = "empty folder"
             return
         try:
             if entry.is_dir:
-                self._exit_visual_mode()
-                next_path = "/" if self.current.path == "/" and not entry.name else f"{self.current.path.rstrip('/')}/{entry.name}"
-                self.stack.append(self._load_folder(entry.id, next_path))
-                self.status_message = next_path
+                target_path = _resolve_download_path(self.download_dir, f"{entry.name}.zip")
+                resolved_path = self._run_with_spinner(
+                    f"zipping {entry.name}",
+                    lambda: download_directory_as_zip(self.client, entry, target_path),
+                )
+                self.status_message = f"downloaded {entry.name}/ -> {resolved_path}"
                 return
             self._start_download(entry)
         except Exception as exc:
@@ -1034,6 +1110,8 @@ class DriveNavigator:
             self.status_message = "Visual cancelled"
             return False
         if key in (ord("q"), 27):
+            if self.upload_mode and self.result.upload_summary is None:
+                self.result.cancelled = True
             return True
         if self.pending_comma:
             if 32 <= key <= 126:
@@ -1115,7 +1193,11 @@ class DriveNavigator:
             return False
         if key in (10, 13, curses.KEY_ENTER):
             self._clear_operator()
-            self._enter()
+            if self.upload_mode:
+                if self._confirm_upload_target():
+                    return True
+                return False
+            self._download_selected_to_pwd()
             return False
         if key == ord("m"):
             self._clear_operator()
@@ -1188,6 +1270,10 @@ class DriveNavigator:
         clip = self.clipboard.status_text()
         if clip:
             parts.append(f"CLIP: {clip}")
+        if self.upload_mode and self.upload_paths:
+            count = len(self.upload_paths)
+            noun = "item" if count == 1 else "items"
+            parts.append(f"UP: {count} {noun}")
         if self.marked_ids:
             parts.append(f"MARKED: {len(self.marked_ids)}")
         visual_count = len(self._visual_indices(len(self._display_items())))
@@ -1268,7 +1354,7 @@ class DriveNavigator:
         self._render_line(height - 1, self._compose_status(scroll_indicator=scroll_indicator)[: max(0, width - 1)])
         self.stdscr.refresh()
 
-    def run(self) -> int:
+    def run(self) -> NavigatorResult:
         while True:
             self._poll_background_jobs()
             self.render()
@@ -1295,10 +1381,17 @@ class DriveNavigator:
                     continue
                 continue
             if self._handle_normal_key(key):
-                return 0
+                return self.result
 
 
-def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path, handlers: dict[str, HandlerSpec]) -> int:
+def _curses_main(
+    stdscr,
+    client: DriveClient,
+    preset: str,
+    download_dir: Path,
+    handlers: dict[str, HandlerSpec],
+    upload_paths: list[Path] | None = None,
+) -> NavigatorResult:
     curses.curs_set(0)
     try:
         curses.noecho()
@@ -1318,9 +1411,47 @@ def _curses_main(stdscr, client: DriveClient, preset: str, download_dir: Path, h
     except Exception:
         pass
     stdscr.timeout(80)
-    navigator = DriveNavigator(stdscr=stdscr, client=client, preset=preset, download_dir=download_dir, handlers=handlers)
+    navigator = DriveNavigator(
+        stdscr=stdscr,
+        client=client,
+        preset=preset,
+        download_dir=download_dir,
+        handlers=handlers,
+        upload_paths=upload_paths,
+    )
     return navigator.run()
 
 
 def browse_drive(client: DriveClient, preset: str, download_dir: Path, handlers: dict[str, HandlerSpec]) -> int:
-    return curses.wrapper(lambda stdscr: _curses_main(stdscr, client, preset, download_dir, handlers))
+    result_holder: dict[str, NavigatorResult] = {}
+
+    def _runner(stdscr):
+        result_holder["result"] = _curses_main(stdscr, client, preset, download_dir, handlers)
+        return result_holder["result"].exit_code
+
+    curses.wrapper(_runner)
+    return result_holder.get("result", NavigatorResult()).exit_code
+
+
+def upload_with_picker(
+    client: DriveClient,
+    preset: str,
+    download_dir: Path,
+    handlers: dict[str, HandlerSpec],
+    upload_paths: list[Path],
+) -> NavigatorResult:
+    result_holder: dict[str, NavigatorResult] = {}
+
+    def _runner(stdscr):
+        result_holder["result"] = _curses_main(
+            stdscr,
+            client,
+            preset,
+            download_dir,
+            handlers,
+            upload_paths=upload_paths,
+        )
+        return result_holder["result"].exit_code
+
+    curses.wrapper(_runner)
+    return result_holder.get("result", NavigatorResult(cancelled=True))

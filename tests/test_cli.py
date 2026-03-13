@@ -11,6 +11,7 @@ from gdrive_cli.cli import (
     ensure_client_secret,
     main,
     run_nav,
+    run_upload_picker,
     write_timer_units,
 )
 
@@ -27,6 +28,7 @@ class CliUsageTests(unittest.TestCase):
         self.assertIn("# <preset> reg <local_dir> <drive_path> and <preset> ls|rm <edit_id>", output)
         self.assertIn("gdrive 1 reg ~/Documents Documents", output)
         self.assertIn("gdrive 1 nav", output)
+        self.assertIn("gdrive 1 up ~/Downloads/report.pdf ~/Pictures", output)
         self.assertIn("gdrive conf", output)
         self.assertNotIn("commands:", output)
         self.assertNotIn("usage:", output)
@@ -68,6 +70,12 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(code, 0)
         run_nav.assert_called_once_with("1")
 
+    def test_up_dispatches_to_run_upload_picker(self):
+        with patch("gdrive_cli.cli.run_upload_picker", return_value=0) as run_upload_picker:
+            code = main(["1", "up", "/tmp/a", "/tmp/b"])
+        self.assertEqual(code, 0)
+        run_upload_picker.assert_called_once_with("1", ["/tmp/a", "/tmp/b"])
+
     def test_run_nav_uses_current_working_directory_for_downloads(self):
         with TemporaryDirectory() as tmp:
             cwd = Path(tmp)
@@ -87,6 +95,31 @@ class CliUsageTests(unittest.TestCase):
             download_dir=cwd,
             handlers={"pdf_viewer": unittest.mock.ANY},
         )
+
+    def test_run_upload_picker_prints_summary(self):
+        with TemporaryDirectory() as tmp:
+            upload_file = Path(tmp) / "report.pdf"
+            upload_file.write_text("x", encoding="utf-8")
+            with patch("gdrive_cli.cli.ensure_client_secret"), patch(
+                "gdrive_cli.cli.load_config", return_value=SimpleNamespace(handlers={})
+            ), patch("gdrive_cli.cli.drive_client", return_value=object()), patch(
+                "gdrive_cli.cli.Path.cwd", return_value=Path(tmp)
+            ), patch.dict(
+                "sys.modules",
+                {
+                    "gdrive_cli.nav": SimpleNamespace(
+                        upload_with_picker=MagicMock(
+                            return_value=SimpleNamespace(
+                                upload_summary=SimpleNamespace(files_uploaded=1, dirs_created=0),
+                                upload_target_path="/Uploads",
+                            )
+                        )
+                    )
+                },
+            ), patch("sys.stdout", new=StringIO()) as stdout:
+                code = run_upload_picker("1", [str(upload_file)])
+        self.assertEqual(code, 0)
+        self.assertIn("uploaded\tfiles=1\tdirs=0\ttarget=/Uploads", stdout.getvalue())
 
     def test_conf_opens_config_in_visual_then_editor_then_vim(self):
         with TemporaryDirectory() as tmp:
