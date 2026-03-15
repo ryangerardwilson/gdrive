@@ -5,8 +5,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
-import urllib.request
 from pathlib import Path
 
 try:
@@ -14,7 +12,7 @@ try:
 except Exception:  # pragma: no cover - optional during source-only edge cases
     charset_normalizer = None
 
-from . import __version__
+from _version import __version__
 from .config import (
     add_registration,
     ensure_account,
@@ -34,11 +32,42 @@ from .errors import CliError
 from .paths import ensure_dirs
 from .sync import delete_state, sync_registration
 from .transfer import normalize_upload_paths
+from rgw_cli_contract import AppSpec, resolve_install_script_path, run_app
 
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
 PRESET_COMMANDS = {"reg", "ls", "rm", "nav", "up"}
 GLOBAL_COMMANDS = {"run", "ti", "td", "st", "conf"}
+INSTALL_SCRIPT = resolve_install_script_path(Path(__file__).resolve().parents[1] / "main.py")
+HELP_TEXT = """gdrive
+
+flags:
+  gdrive -h
+    show this help
+  gdrive -v
+    print the installed version
+  gdrive -u
+    upgrade to the latest release
+  gdrive conf
+    open the config in your editor
+
+features:
+  authorize a Google account and save or refresh its preset
+  # gdrive auth <client_secret_path>
+  gdrive auth ~/Documents/credentials/client_secret.json
+
+  register folders to sync into Drive, then inspect or remove registrations
+  # gdrive <preset> reg <local_dir> <drive_path> | gdrive <preset> ls | gdrive <preset> rm <edit_id>
+  gdrive 1 reg ~/Documents Documents
+  gdrive 1 ls
+  gdrive 1 rm abcd1234
+
+  browse Drive, upload local files, and run sync flows
+  # gdrive <preset> nav | gdrive <preset> up <path...> | gdrive run
+  gdrive 1 nav
+  gdrive 1 up ~/Downloads/report.pdf ~/Pictures
+  gdrive run
+"""
 
 
 def _muted_text(text: str) -> str:
@@ -68,46 +97,7 @@ def compact_usage() -> str:
 
 
 def print_help_text() -> None:
-    lines = [
-        "Google Drive backup CLI",
-        "",
-        "flags:",
-        "  gdrive -h",
-        "    show this help",
-        "  gdrive -v",
-        "    print the installed version",
-        "  gdrive -u",
-        "    upgrade to the latest release",
-        "",
-        "features:",
-        "  authorize a Google account and save or refresh its preset",
-        "  # auth <client_secret_path>",
-        "  gdrive auth ~/Documents/credentials/client_secret.json",
-        "",
-        "  register folders to sync into Drive, then inspect or remove registrations",
-        "  # <preset> reg <local_dir> <drive_path> and <preset> ls|rm <edit_id>",
-        "  gdrive 1 reg ~/Documents Documents",
-        "  gdrive 1 ls",
-        "  gdrive 1 rm abcd1234",
-        "",
-        "  browse Drive in a list-style TUI; `l` enters dirs or opens files, Enter downloads files and zips dirs to cwd",
-        "  # <preset> nav",
-        "  gdrive 1 nav",
-        "",
-        "  upload local files or folders by picking the target Drive directory in nav mode",
-        "  # <preset> up <file_path> <file_path> ...",
-        "  gdrive 1 up ~/Downloads/report.pdf ~/Pictures",
-        "",
-        "  open the config in your editor",
-        "  # conf",
-        "  gdrive conf",
-        "",
-        "  run all syncs and manage the hourly sync timer",
-        "  # conf|run|ti|td|st",
-        "  gdrive run",
-        "  gdrive ti",
-    ]
-    print(_muted_text("\n".join(lines)))
+    print(_muted_text(HELP_TEXT))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -260,26 +250,6 @@ def open_config_in_editor() -> int:
     return result.returncode
 
 
-def upgrade_app() -> int:
-    script_url = "https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh"
-    with urllib.request.urlopen(script_url) as response:
-        script_body = response.read()
-    with tempfile.NamedTemporaryFile(delete=False) as handle:
-        handle.write(script_body)
-        script_path = Path(handle.name)
-    try:
-        script_path.chmod(0o700)
-        result = subprocess.run(
-            ["/usr/bin/env", "bash", str(script_path), "-u"],
-            check=False,
-            text=True,
-            env=os.environ.copy(),
-        )
-        return result.returncode
-    finally:
-        script_path.unlink(missing_ok=True)
-
-
 def unit_name() -> str:
     return "gdrive"
 
@@ -399,22 +369,15 @@ def parse_command(preset: str | None, command: str | None, params: list[str]) ->
     return str(preset), list(params)
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
+def _config_path() -> Path:
+    ensure_dirs()
+    return load_config().path
+
+
+def _dispatch(argv: list[str]) -> int:
     parser = build_parser()
-    if not argv:
-        print_help_text()
-        return 0
     args = parser.parse_args(argv)
-    if args.help:
-        print_help_text()
-        return 0
     try:
-        if args.version:
-            print(__version__)
-            return 0
-        if args.upgrade:
-            return upgrade_app()
         if args.preset == "auth":
             if args.command is None or args.params:
                 raise CliError("usage: gdrive auth <client_secret_path>")
@@ -467,3 +430,18 @@ def main(argv: list[str] | None = None) -> int:
         message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
         print(f"systemctl failed: {message}", file=sys.stderr)
         return 2
+
+
+APP_SPEC = AppSpec(
+    app_name="gdrive",
+    version=__version__,
+    help_text=HELP_TEXT,
+    install_script_path=INSTALL_SCRIPT,
+    no_args_mode="help",
+    config_path_factory=_config_path,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    return run_app(APP_SPEC, args, _dispatch)
