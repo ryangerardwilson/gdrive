@@ -34,8 +34,6 @@ from .sync import delete_state, sync_registration
 from .transfer import normalize_upload_paths
 from rgw_cli_contract import AppSpec, resolve_install_script_path, run_app
 
-ANSI_RESET = "\033[0m"
-ANSI_GRAY = "\033[38;5;245m"
 PRESET_COMMANDS = {"reg", "ls", "rm", "nav", "up"}
 GLOBAL_COMMANDS = {"run", "ti", "td", "st", "conf"}
 INSTALL_SCRIPT = resolve_install_script_path(Path(__file__).resolve().parents[1] / "main.py")
@@ -68,14 +66,6 @@ features:
   gdrive 1 up ~/Downloads/report.pdf ~/Pictures
   gdrive run
 """
-
-
-def _muted_text(text: str) -> str:
-    if not sys.stdout.isatty() or "NO_COLOR" in os.environ:
-        return text
-    return f"{ANSI_GRAY}{text}{ANSI_RESET}"
-
-
 def compact_usage() -> str:
     return "\n".join(
         [
@@ -97,7 +87,7 @@ def compact_usage() -> str:
 
 
 def print_help_text() -> None:
-    print(_muted_text(HELP_TEXT))
+    print(HELP_TEXT)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -164,7 +154,6 @@ def print_registrations(preset: str) -> int:
     if not regs:
         print("no registrations")
         return 0
-    use_color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
     label_width = len("edit_id")
     sections: list[str] = []
     for index, reg in enumerate(regs, start=1):
@@ -177,8 +166,6 @@ def print_registrations(preset: str) -> int:
             f"{'drive':<{label_width}}   : {root_name}/{reg.drive_path}",
             url,
         ]
-        if use_color:
-            body_lines = [f"{ANSI_GRAY}{line}{ANSI_RESET}" for line in body_lines]
         sections.append("\n".join([header, *body_lines]))
     print("\n".join(sections))
     return 0
