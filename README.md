@@ -114,7 +114,7 @@ Notes:
 - Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
 - `nav` uses `l` to enter directories or download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
 - `nav` uses `Enter` to download a file into the current working directory from which you launched `gdrive`.
-- In normal `nav`, pressing `Enter` on a directory downloads that directory to the current working directory as a `.zip`.
+- In normal `nav`, pressing `Enter` on a directory downloads it, extracts it into a normal directory in the current working directory, and removes the temporary `.zip`.
 - `up <file_path> ...` opens the same navigator in upload-picker mode; press `Enter` on a directory to upload there, or on a file to upload into that file's parent directory.
 - `handlers` use the same object form as `o`: `commands` is a list of commands to try, `{file}` is substituted if present, and `is_internal: true` runs the handler in the current terminal after suspending the TUI.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.

@@ -64,3 +64,20 @@ def download_directory_as_zip(client, entry, target_path: Path) -> Path:
         archive_base = target_path.with_suffix("")
         created_archive = shutil.make_archive(str(archive_base), "zip", root_dir=tmp_root, base_dir=entry.name)
         return Path(created_archive)
+
+
+def download_directory_as_folder(client, entry, target_path: Path) -> Path:
+    if target_path.exists():
+        raise CliError(f"target path already exists: {target_path}")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="gdrive-dir-folder-") as tmp:
+        tmp_root = Path(tmp)
+        archive_path = download_directory_as_zip(client, entry, tmp_root / f"{entry.name}.zip")
+        extract_root = tmp_root / "extract"
+        extract_root.mkdir(parents=True, exist_ok=True)
+        shutil.unpack_archive(str(archive_path), str(extract_root))
+        extracted_root = extract_root / entry.name
+        if not extracted_root.is_dir():
+            raise CliError(f"downloaded archive for {entry.name} was invalid")
+        shutil.move(str(extracted_root), str(target_path))
+    return target_path

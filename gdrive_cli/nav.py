@@ -14,7 +14,7 @@ from pathlib import Path
 from .config import HandlerSpec
 from .drive_api import DriveClient, NavEntry
 from .file_handlers import resolve_download_name, select_handler_spec
-from .transfer import UploadSummary, download_directory_as_zip, upload_local_paths
+from .transfer import UploadSummary, download_directory_as_folder, upload_local_paths
 
 
 @dataclass(slots=True)
@@ -96,7 +96,7 @@ Navigation
   h               Parent directory
   l               Enter directory or open file through handlers
   j / k           Down / Up
-  Enter           Download file to cwd, zip directories to cwd, or confirm upload target in up mode
+  Enter           Download files or directories to cwd, or confirm upload target in up mode
   Esc             Exit visual mode, or quit when visual mode is off
 
 Clipboard & Multi Operations
@@ -919,10 +919,10 @@ class DriveNavigator:
             return
         try:
             if entry.is_dir:
-                target_path = _resolve_download_path(self.download_dir, f"{entry.name}.zip")
+                target_path = _resolve_download_path(self.download_dir, entry.name)
                 resolved_path = self._run_with_spinner(
-                    f"zipping {entry.name}",
-                    lambda: download_directory_as_zip(self.client, entry, target_path),
+                    f"downloading {entry.name}",
+                    lambda: download_directory_as_folder(self.client, entry, target_path),
                 )
                 self.status_message = f"downloaded {entry.name}/ -> {resolved_path}"
                 return

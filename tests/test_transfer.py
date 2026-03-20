@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from gdrive_cli.errors import CliError
-from gdrive_cli.transfer import download_directory_as_zip, normalize_upload_paths, upload_local_paths
+from gdrive_cli.transfer import download_directory_as_folder, download_directory_as_zip, normalize_upload_paths, upload_local_paths
 
 
 class FakeDriveClient:
@@ -101,3 +101,19 @@ class TransferTests(unittest.TestCase):
                 self.assertIn("Exports/alpha.txt", names)
                 self.assertIn("Exports/docs/beta.txt", names)
                 self.assertEqual(archive.read("Exports/alpha.txt").decode("utf-8"), "downloaded:alpha.txt")
+
+    def test_download_directory_as_folder_extracts_tree_and_leaves_no_zip(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            client = FakeDriveClient()
+            folder_path = download_directory_as_folder(
+                client,
+                SimpleNamespace(id="root", name="Exports"),
+                tmp_path / "Exports",
+            )
+
+            self.assertEqual(folder_path, tmp_path / "Exports")
+            self.assertTrue(folder_path.is_dir())
+            self.assertFalse((tmp_path / "Exports.zip").exists())
+            self.assertEqual((folder_path / "alpha.txt").read_text(encoding="utf-8"), "downloaded:alpha.txt")
+            self.assertEqual((folder_path / "docs" / "beta.txt").read_text(encoding="utf-8"), "downloaded:beta.txt")
