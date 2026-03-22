@@ -70,6 +70,7 @@ jobs:
               "$PYBIN" -m PyInstaller --clean --onedir --name gdrive \
                 --collect-all charset_normalizer \
                 main.py
+              "$PYBIN" .github/scripts/clear-execstack.py dist/gdrive
               cp install.sh dist/gdrive/
 
               tar -C dist -czf gdrive-linux-x64.tar.gz gdrive
