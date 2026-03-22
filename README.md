@@ -10,6 +10,13 @@ Binary install:
 curl -fsSL https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh | bash
 ```
 
+Manually add this to `~/.bashrc`, then reload your shell:
+
+```bash
+export PATH="$HOME/.gdrive/bin:$PATH"
+source ~/.bashrc
+```
+
 Source install:
 
 ```bash
