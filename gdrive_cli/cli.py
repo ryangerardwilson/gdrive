@@ -65,6 +65,12 @@ features:
   gdrive 1 nav
   gdrive 1 up ~/Downloads/report.pdf ~/Pictures
   gdrive run
+
+  install, disable, or inspect the hourly systemd timer
+  # gdrive ti | gdrive td | gdrive st
+  gdrive ti
+  gdrive td
+  gdrive st
 """
 def compact_usage() -> str:
     return "\n".join(
