@@ -45,7 +45,10 @@ The first interactive command asks for:
 - the preset-specific client secret JSON path
 - the preset-specific Google Drive folder name that should hold all managed backups
 
-The first authenticated sync opens a browser and stores the refresh token locally.
+The first authenticated sync opens a browser and stores the refresh token
+locally. If the final browser page says `localhost refused to connect`, keep
+the terminal open and paste the full `localhost` URL from the browser address
+bar when prompted.
 
 Recommended setup:
 
