@@ -133,15 +133,17 @@ Notes:
 - `run` is global. It syncs every registration across every configured preset.
 - `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
 - `-v` prints the installed app version from the app's runtime version module. Source checkouts may keep a placeholder value until release automation stamps the shipped artifact.
-- The local folder is authoritative. If you remove a local file, the matching Drive file is removed on the next sync.
+- `gdrive pull` restores registered Drive folders into their configured local folders without deleting, uploading, or overwriting remote files.
+- The local folder is authoritative after restore. If you remove a local file, the matching Drive file is removed on the next `gdrive run`.
 - If a file is renamed locally without content changes, the CLI attempts to propagate it as a Drive rename/move by matching the prior snapshot.
 - Remote files created manually inside a managed Drive folder are deleted on the next sync if they do not exist locally.
 
 ## Timer
 
-`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets. The service sends desktop notifications through the Quickshell bar when the timer run starts, succeeds, or fails, falling back to `notify-send` when the bar is unavailable.
+`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets. Run `gdrive pull` first on a fresh machine so registered folders such as music and books are hydrated locally before the local-authoritative timer starts. The service sends desktop notifications through the Quickshell bar when the timer run starts, succeeds, or fails, falling back to `notify-send` when the bar is unavailable.
 
 ```bash
+python main.py pull
 python main.py ti
 systemctl --user list-timers gdrive.timer
 ```

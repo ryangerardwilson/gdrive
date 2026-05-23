@@ -10,6 +10,7 @@ from gdrive_cli.cli import (
     ensure_backup_root_name,
     ensure_client_secret,
     main,
+    run_restore_all,
     run_nav,
     run_upload_picker,
     write_timer_units,
@@ -31,6 +32,7 @@ class CliUsageTests(unittest.TestCase):
         self.assertIn("gdrive 1 reg ~/Documents Documents", output)
         self.assertIn("gdrive 1 nav", output)
         self.assertIn("gdrive 1 up ~/Downloads/report.pdf ~/Pictures", output)
+        self.assertIn("gdrive pull", output)
         self.assertIn("gdrive run", output)
         self.assertIn("install, disable, or inspect the hourly systemd timer", output)
         self.assertIn("# gdrive ti | gdrive td | gdrive st", output)
@@ -171,3 +173,47 @@ class CliUsageTests(unittest.TestCase):
             self.assertIn("Hourly backup started", service_body)
             self.assertIn("Hourly backup finished successfully", service_body)
             self.assertIn("Hourly backup failed", service_body)
+
+    def test_install_timer_restarts_existing_timer(self):
+        with patch("gdrive_cli.cli.write_timer_units") as write_units, patch(
+            "gdrive_cli.cli.systemctl_user"
+        ) as systemctl_user:
+            code = main(["ti"])
+        self.assertEqual(code, 0)
+        write_units.assert_called_once()
+        systemctl_user.assert_any_call("daemon-reload")
+        systemctl_user.assert_any_call("enable", "gdrive.timer")
+        systemctl_user.assert_any_call("restart", "gdrive.timer")
+
+    def test_run_restore_all_restores_each_registered_folder(self):
+        account = SimpleNamespace(
+            registrations=[
+                SimpleNamespace(id="1", enabled=True),
+                SimpleNamespace(id="2", enabled=True),
+            ]
+        )
+        config = SimpleNamespace(accounts={"1": account})
+        summaries = [
+            SimpleNamespace(downloaded=2, dirs_created=1, skipped_existing=0, state_entries=3),
+            SimpleNamespace(downloaded=1, dirs_created=0, skipped_existing=1, state_entries=1),
+        ]
+        with patch("gdrive_cli.cli.load_config", return_value=config), patch(
+            "gdrive_cli.cli.get_account", return_value=account
+        ), patch("gdrive_cli.cli.require_client_secret"), patch(
+            "gdrive_cli.cli.require_backup_root_name", return_value="Backups"
+        ), patch("gdrive_cli.cli.drive_client", return_value=object()), patch(
+            "gdrive_cli.cli.restore_registration_from_remote", side_effect=summaries
+        ) as restore, patch("gdrive_cli.cli.update_registration") as update_registration, patch(
+            "sys.stdout", new=StringIO()
+        ) as stdout:
+            code = run_restore_all()
+        self.assertEqual(code, 0)
+        self.assertEqual(restore.call_count, 2)
+        self.assertEqual(update_registration.call_count, 2)
+        self.assertIn("downloaded=2", stdout.getvalue())
+
+    def test_preset_pull_dispatches_single_registration(self):
+        with patch("gdrive_cli.cli._restore_account_registrations", return_value=True) as restore:
+            code = main(["1", "pull", "2"])
+        self.assertEqual(code, 0)
+        restore.assert_called_once_with("1", "2")

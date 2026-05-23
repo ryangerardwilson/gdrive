@@ -42,6 +42,14 @@ class SyncSummary:
     deleted: int = 0
 
 
+@dataclass(slots=True)
+class RestoreSummary:
+    downloaded: int = 0
+    dirs_created: int = 0
+    skipped_existing: int = 0
+    state_entries: int = 0
+
+
 def legacy_state_file(reg_id: str) -> Path:
     ensure_dirs()
     return state_dir() / f"{reg_id}.json"
@@ -282,5 +290,64 @@ def sync_registration(preset: str, registration, drive: DriveClient, backup_root
         drive.delete_entry(previous[relpath].drive_id)
         summary.deleted += 1
 
+    save_state(preset, registration.id, current_state)
+    return summary
+
+
+def restore_registration_from_remote(preset: str, registration, drive: DriveClient, backup_root_name: str) -> RestoreSummary:
+    local_root = Path(registration.local_dir)
+    local_root.mkdir(parents=True, exist_ok=True)
+    remote_root_id = registration.remote_root_id or drive.ensure_drive_path(
+        f"{backup_root_name}/{registration.drive_path}"
+    )
+    registration.remote_root_id = remote_root_id
+    remote_entries = drive.list_tree(remote_root_id)
+    summary = RestoreSummary()
+    current_state: dict[str, StateEntry] = {}
+
+    for relpath in sort_paths_deep([path for path, entry in remote_entries.items() if entry.is_dir]):
+        target = local_root / relpath
+        if not target.exists():
+            target.mkdir(parents=True, exist_ok=True)
+            summary.dirs_created += 1
+        if not target.is_dir():
+            raise CliError(f"cannot restore directory over file: {target}")
+        stat = target.stat()
+        current_state[relpath] = StateEntry(
+            relpath=relpath,
+            kind="dir",
+            drive_id=remote_entries[relpath].id,
+            parent_relpath=parent_relpath(relpath),
+            size=0,
+            mtime_ns=stat.st_mtime_ns,
+            sha1=None,
+        )
+
+    for relpath in sort_paths_deep([path for path, entry in remote_entries.items() if not entry.is_dir]):
+        entry = remote_entries[relpath]
+        target = local_root / relpath
+        if target.exists():
+            if target.is_dir():
+                raise CliError(f"cannot restore file over directory: {target}")
+            summary.skipped_existing += 1
+            continue
+
+        downloaded = drive.download_entry(entry, target)
+        if not downloaded.is_relative_to(local_root):
+            raise CliError(f"download escaped local root: {downloaded}")
+        relative_downloaded = downloaded.relative_to(local_root).as_posix()
+        stat = downloaded.stat()
+        current_state[relative_downloaded] = StateEntry(
+            relpath=relative_downloaded,
+            kind="file",
+            drive_id=entry.id,
+            parent_relpath=parent_relpath(relative_downloaded),
+            size=stat.st_size,
+            mtime_ns=stat.st_mtime_ns,
+            sha1=sha1_file(downloaded),
+        )
+        summary.downloaded += 1
+
+    summary.state_entries = len(current_state)
     save_state(preset, registration.id, current_state)
     return summary

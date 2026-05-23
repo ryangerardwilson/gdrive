@@ -30,12 +30,12 @@ from .config import (
 )
 from .errors import CliError
 from .paths import ensure_dirs
-from .sync import delete_state, sync_registration
+from .sync import delete_state, restore_registration_from_remote, sync_registration
 from .transfer import normalize_upload_paths
 from rgw_cli_contract import AppSpec, resolve_install_script_path, run_app
 
-PRESET_COMMANDS = {"reg", "ls", "rm", "nav", "up"}
-GLOBAL_COMMANDS = {"run", "ti", "td", "st", "conf"}
+PRESET_COMMANDS = {"reg", "ls", "rm", "nav", "up", "pull"}
+GLOBAL_COMMANDS = {"run", "pull", "ti", "td", "st", "conf"}
 INSTALL_SCRIPT = resolve_install_script_path(Path(__file__).resolve().parents[1] / "main.py")
 HELP_TEXT = """gdrive
 
@@ -60,10 +60,11 @@ features:
   gdrive 1 ls
   gdrive 1 rm abcd1234
 
-  browse Drive, upload local files, and run sync flows
-  # gdrive <preset> nav | gdrive <preset> up <path...> | gdrive run
+  browse Drive, upload local files, restore registered folders, and run sync flows
+  # gdrive <preset> nav | gdrive <preset> up <path...> | gdrive pull | gdrive run
   gdrive 1 nav
   gdrive 1 up ~/Downloads/report.pdf ~/Pictures
+  gdrive pull
   gdrive run
 
   install, disable, or inspect the hourly systemd timer
@@ -83,6 +84,7 @@ def compact_usage() -> str:
             "       gdrive <preset> nav",
             "       gdrive <preset> up <file_path> <file_path> ...",
             "       gdrive conf",
+            "       gdrive pull",
             "       gdrive run",
             "       gdrive <preset> rm <edit_id>",
             "       gdrive ti",
@@ -340,7 +342,8 @@ def systemctl_user(*args: str) -> subprocess.CompletedProcess[str]:
 def install_timer() -> int:
     write_timer_units()
     systemctl_user("daemon-reload")
-    systemctl_user("enable", "--now", f"{unit_name()}.timer")
+    systemctl_user("enable", f"{unit_name()}.timer")
+    systemctl_user("restart", f"{unit_name()}.timer")
     print(f"timer enabled: {unit_name()}.timer")
     return 0
 
@@ -380,6 +383,42 @@ def run_sync_all() -> int:
     return 0
 
 
+def _restore_account_registrations(preset: str, registration_id: str | None = None) -> bool:
+    config = load_config()
+    account = get_account(config, preset)
+    regs = account.registrations
+    if registration_id is not None:
+        regs = [get_registration(account, registration_id)]
+    if not regs:
+        return False
+    require_client_secret(account)
+    backup_root_name = require_backup_root_name(account)
+    client = drive_client(preset)
+    did_work = False
+    for reg in regs:
+        if not reg.enabled:
+            continue
+        summary = restore_registration_from_remote(preset, reg, client, backup_root_name)
+        update_registration(preset, reg)
+        did_work = True
+        print(
+            f"{preset}:{reg.id}\tdownloaded={summary.downloaded}\tdirs_created={summary.dirs_created}\tskipped_existing={summary.skipped_existing}\tstate_entries={summary.state_entries}"
+        )
+    return did_work
+
+
+def run_restore_all() -> int:
+    config = load_config()
+    did_work = False
+    for preset, account in config.accounts.items():
+        if not account.registrations:
+            continue
+        did_work = _restore_account_registrations(preset) or did_work
+    if not did_work:
+        raise CliError("no registrations")
+    return 0
+
+
 def parse_command(preset: str | None, command: str | None, params: list[str]) -> tuple[str, list[str]]:
     if not preset:
         raise CliError("missing preset: use `gdrive <preset> <command>`")
@@ -387,7 +426,7 @@ def parse_command(preset: str | None, command: str | None, params: list[str]) ->
         raise CliError("preset must be numeric, like `1` or `2`")
     if not command:
         raise CliError("missing command")
-    if command in GLOBAL_COMMANDS:
+    if command in GLOBAL_COMMANDS and command != "pull":
         raise CliError(f"`{command}` is global: use `gdrive {command}`")
     if command not in PRESET_COMMANDS:
         raise CliError(f"unknown command `{command}`")
@@ -407,11 +446,13 @@ def _dispatch(argv: list[str]) -> int:
             if args.command is None or args.params:
                 raise CliError("usage: gdrive auth <client_secret_path>")
             return auth_account(args.command)
-        if args.preset in {"run", "ti", "td", "st", "conf"}:
+        if args.preset in {"run", "pull", "ti", "td", "st", "conf"}:
             if args.command or args.params:
                 raise CliError(f"usage: gdrive {args.preset}")
             if args.preset == "conf":
                 return open_config_in_editor()
+            if args.preset == "pull":
+                return run_restore_all()
             if args.preset == "run":
                 return run_sync_all()
             if args.preset == "ti":
@@ -446,6 +487,11 @@ def _dispatch(argv: list[str]) -> int:
             return run_nav(preset)
         if args.command == "up":
             return run_upload_picker(preset, params)
+        if args.command == "pull":
+            if len(params) > 1:
+                raise CliError("usage: gdrive <preset> pull [edit_id]")
+            _restore_account_registrations(preset, params[0] if params else None)
+            return 0
         print(compact_usage())
         return 1
     except CliError as exc:

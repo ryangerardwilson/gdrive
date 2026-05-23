@@ -28,6 +28,7 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 - `auth <client_secret_path>` is the only no-preset account bootstrap command.
 - `reg`, `ls`, and `rm` are preset-scoped: `gdrive <preset> <command> ...`.
 - `run`, `ti`, `td`, and `st` are global and must not take a preset.
+- `pull` is the non-destructive fresh-machine restore path. It must hydrate local registered folders from Drive and seed sync state before any timer-driven `run`.
 - Output should stay plain-text and deterministic.
 
 ## Architecture expectations
@@ -53,3 +54,4 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 - `run` makes Drive match local content across every configured preset, including local deletes.
 - Content-preserving local file renames are propagated as Drive moves/renames when detectable; otherwise the end state must still match local.
 - `ti` installs one hourly user timer that runs the same global sync command and sends notifications through the Quickshell bar, with `notify-send` only as a fallback.
+- Fresh-machine restore can run `gdrive pull` before `gdrive ti` without deleting remote files due to an empty local tree.
