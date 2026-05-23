@@ -159,6 +159,14 @@ class CliUsageTests(unittest.TestCase):
             ), patch("sys.executable", "/tmp/gdrive"), patch("sys.frozen", True, create=True):
                 write_timer_units()
             service_path = home / ".config" / "systemd" / "user" / "gdrive.service"
+            timer_path = home / ".config" / "systemd" / "user" / "gdrive.timer"
             service_body = service_path.read_text(encoding="utf-8")
-            self.assertIn("ExecStart=/usr/bin/env bash -lc '/tmp/gdrive run &&", service_body)
+            timer_body = timer_path.read_text(encoding="utf-8")
+            self.assertIn("ExecStart=/usr/bin/env bash -lc", service_body)
+            self.assertIn("if /tmp/gdrive run; then", service_body)
             self.assertNotIn("main.py run", service_body)
+            self.assertIn("OnActiveSec=5m", timer_body)
+            self.assertIn("notify-send", service_body)
+            self.assertIn("Hourly backup started", service_body)
+            self.assertIn("Hourly backup finished successfully", service_body)
+            self.assertIn("Hourly backup failed", service_body)

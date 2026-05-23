@@ -256,6 +256,22 @@ def _build_runtime_command(*args: str) -> str:
     return " ".join(command_parts)
 
 
+def _build_timer_service_script(run_command: str) -> str:
+    return " ".join(
+        [
+            "notify() { if command -v notify-send >/dev/null 2>&1; then notify-send \"$@\" || true; fi; };",
+            "notify 'gdrive' 'Hourly backup started';",
+            f"if {run_command}; then",
+            "notify 'gdrive' 'Hourly backup finished successfully';",
+            "else",
+            "rc=$?;",
+            "notify -u critical 'gdrive' 'Hourly backup failed';",
+            'exit "$rc";',
+            "fi",
+        ]
+    )
+
+
 def write_timer_units() -> None:
     ensure_dirs()
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
@@ -264,7 +280,7 @@ def write_timer_units() -> None:
     timer_path = systemd_dir / f"{unit_name()}.timer"
     entrypoint = Path(__file__).resolve().parents[1] / "main.py"
     run_command = _build_runtime_command("run")
-    notify_command = "notify-send 'gdrive' 'Hourly backup finished successfully'"
+    service_script = _build_timer_service_script(run_command)
     service_body = "\n".join(
         [
             "[Unit]",
@@ -273,7 +289,7 @@ def write_timer_units() -> None:
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={entrypoint.parent}",
-            f"ExecStart=/usr/bin/env bash -lc {shlex.quote(f'{run_command} && {notify_command}')}",
+            f"ExecStart=/usr/bin/env bash -lc {shlex.quote(service_script)}",
             "",
         ]
     )
@@ -284,6 +300,7 @@ def write_timer_units() -> None:
             "",
             "[Timer]",
             "OnBootSec=5m",
+            "OnActiveSec=5m",
             "OnUnitActiveSec=1h",
             "Persistent=true",
             "",
