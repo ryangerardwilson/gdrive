@@ -166,6 +166,7 @@ class CliUsageTests(unittest.TestCase):
             self.assertIn("if /tmp/gdrive run; then", service_body)
             self.assertNotIn("main.py run", service_body)
             self.assertIn("OnActiveSec=5m", timer_body)
+            self.assertIn("quickshell ipc -p \"$qs\" call bar notify", service_body)
             self.assertIn("notify-send", service_body)
             self.assertIn("Hourly backup started", service_body)
             self.assertIn("Hourly backup finished successfully", service_body)

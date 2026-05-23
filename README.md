@@ -30,8 +30,8 @@ python main.py -h
 
 ## External dependencies
 
-- `notify-send` for timer success notifications
-- a notification daemon such as Mako to display those notifications
+- Quickshell with the `omarchy-bar` IPC toast endpoint for timer notifications
+- `notify-send` as a fallback when the Quickshell bar is not running
 
 ## Google OAuth setup
 
@@ -139,7 +139,7 @@ Notes:
 
 ## Timer
 
-`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets. The service sends desktop notifications through `notify-send` for Mako when the timer run starts, succeeds, or fails.
+`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets. The service sends desktop notifications through the Quickshell bar when the timer run starts, succeeds, or fails, falling back to `notify-send` when the bar is unavailable.
 
 ```bash
 python main.py ti

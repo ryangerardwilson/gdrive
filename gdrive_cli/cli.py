@@ -256,16 +256,31 @@ def _build_runtime_command(*args: str) -> str:
     return " ".join(command_parts)
 
 
+def _notification_shell_function() -> str:
+    return " ".join(
+        [
+            "notify() {",
+            'summary="$1";',
+            'body="${2:-}";',
+            'urgency="${3:-normal}";',
+            'qs="${XDG_CONFIG_HOME:-$HOME/.config}/quickshell/omarchy-bar";',
+            'if command -v quickshell >/dev/null 2>&1 && quickshell ipc -p "$qs" call bar notify "$summary" "$body" "$urgency" >/dev/null 2>&1; then return 0; fi;',
+            'if command -v notify-send >/dev/null 2>&1; then notify-send -a "$summary" -u "$urgency" "$summary" "$body" || true; fi;',
+            "};",
+        ]
+    )
+
+
 def _build_timer_service_script(run_command: str) -> str:
     return " ".join(
         [
-            "notify() { if command -v notify-send >/dev/null 2>&1; then notify-send \"$@\" || true; fi; };",
-            "notify 'gdrive' 'Hourly backup started';",
+            _notification_shell_function(),
+            "notify 'gdrive' 'Hourly backup started' normal;",
             f"if {run_command}; then",
-            "notify 'gdrive' 'Hourly backup finished successfully';",
+            "notify 'gdrive' 'Hourly backup finished successfully' normal;",
             "else",
             "rc=$?;",
-            "notify -u critical 'gdrive' 'Hourly backup failed';",
+            "notify 'gdrive' 'Hourly backup failed' critical;",
             'exit "$rc";',
             "fi",
         ]
