@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,9 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .errors import ApiError
 from .drive_types import EXPORT_MIME_TYPES, FOLDER_MIME
+
+UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+UPLOAD_TIMEOUT_RETRIES = 5
 
 
 @dataclass(slots=True)
@@ -43,24 +47,42 @@ class DriveClient:
     def __init__(self, creds):
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
+    def _raise_http_error(self, exc: HttpError) -> None:
+        status = getattr(exc.resp, "status", None)
+        body = ""
+        if hasattr(exc, "content") and exc.content:
+            try:
+                body = exc.content.decode("utf-8", errors="replace")
+            except Exception:
+                body = str(exc)
+        text = body or str(exc)
+        if status == 403 and "accessNotConfigured" in text:
+            raise ApiError(
+                "google drive api is disabled for this oauth project. "
+                "enable Drive API in Google Cloud Console for this client id, wait a few minutes, then retry."
+            ) from exc
+        raise ApiError(f"google drive api error ({status}): {text}") from exc
+
     def _execute(self, request):
         try:
             return request.execute()
         except HttpError as exc:
-            status = getattr(exc.resp, "status", None)
-            body = ""
-            if hasattr(exc, "content") and exc.content:
-                try:
-                    body = exc.content.decode("utf-8", errors="replace")
-                except Exception:
-                    body = str(exc)
-            text = body or str(exc)
-            if status == 403 and "accessNotConfigured" in text:
-                raise ApiError(
-                    "google drive api is disabled for this oauth project. "
-                    "enable Drive API in Google Cloud Console for this client id, wait a few minutes, then retry."
-                ) from exc
-            raise ApiError(f"google drive api error ({status}): {text}") from exc
+            self._raise_http_error(exc)
+
+    def _execute_resumable_upload(self, request) -> dict:
+        response = None
+        timeout_failures = 0
+        while response is None:
+            try:
+                _, response = request.next_chunk(num_retries=3)
+            except HttpError as exc:
+                self._raise_http_error(exc)
+            except (TimeoutError, OSError) as exc:
+                timeout_failures += 1
+                if timeout_failures > UPLOAD_TIMEOUT_RETRIES:
+                    raise ApiError(f"google drive upload timed out after {UPLOAD_TIMEOUT_RETRIES} retries: {exc}") from exc
+                time.sleep(min(2**timeout_failures, 30))
+        return response
 
     def find_child(self, parent_id: str, name: str, mime_type: str | None = None) -> dict | None:
         query = [f"'{parent_id}' in parents", f"name = '{escape_query(name)}'", "trashed = false"]
@@ -218,9 +240,9 @@ class DriveClient:
         return result
 
     def upload_file(self, parent_id: str, name: str, file_path: str) -> str:
-        media = MediaFileUpload(file_path, resumable=False)
+        media = MediaFileUpload(file_path, chunksize=UPLOAD_CHUNK_SIZE, resumable=True)
         body = {"name": name, "parents": [parent_id]}
-        result = self._execute(self.service.files().create(
+        result = self._execute_resumable_upload(self.service.files().create(
             body=body,
             media_body=media,
             fields="id",
@@ -229,8 +251,8 @@ class DriveClient:
         return result["id"]
 
     def update_file(self, file_id: str, file_path: str) -> None:
-        media = MediaFileUpload(file_path, resumable=False)
-        self._execute(self.service.files().update(
+        media = MediaFileUpload(file_path, chunksize=UPLOAD_CHUNK_SIZE, resumable=True)
+        self._execute_resumable_upload(self.service.files().update(
             fileId=file_id,
             media_body=media,
             fields="id",
