@@ -39,12 +39,12 @@ ANSI_RESET = "\033[0m"
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh"
 HELP_TEXT = """gdrive
 
-flags:
-  gdrive -h
+global actions:
+  gdrive help
     show this help
-  gdrive -v
+  gdrive version
     print the installed version
-  gdrive -u
+  gdrive upgrade
     upgrade to the latest release
 
 features:
@@ -101,7 +101,7 @@ def upgrade_app() -> int:
     try:
         script_path.chmod(0o700)
         result = subprocess.run(
-            ["/usr/bin/env", "bash", str(script_path), "-u"],
+            ["/usr/bin/env", "bash", str(script_path), "upgrade"],
             check=False,
             text=True,
             env=os.environ.copy(),
@@ -513,15 +513,15 @@ def _dispatch(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if not args or args == ["-h"]:
+    if not args or args == ["help"]:
         print_help_text()
         return 0
-    if args == ["-v"]:
+    if args == ["version"]:
         print(__version__)
         return 0
-    if args == ["-u"]:
+    if args == ["upgrade"]:
         return upgrade_app()
-    if args and args[0] in {"-h", "-v", "-u"}:
+    if args and args[0] in {"help", "version", "upgrade"}:
         print(f"usage: gdrive {args[0]}", file=sys.stderr)
         return 2
     return _dispatch(args)

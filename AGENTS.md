@@ -2,7 +2,7 @@
 
 ## Workspace Defaults
 - Follow `/home/ryan/Subagents/cpo/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
-- Follow `/home/ryan/Subagents/cto/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
+- Follow `/home/ryan/Subagents/cto/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `help`, `version`, `upgrade`, installer behavior, release workflow expectations, and regression expectations.
 - This file only records `gdrive`-specific constraints or durable deviations.
 
 ## Mission
@@ -17,7 +17,7 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 
 ## Interface constraints
 - Keep the command surface compact and keyboard-first.
-- No-arg invocation prints the same help as `-h`.
+- No-arg invocation prints the same help as `help`.
 - Canonical commands are declarative English only:
   - `gdrive auth <client_secret_path>` authorizes a Google account and creates or updates a preset
   - `gdrive <preset> register <local_dir> as <drive_path>` registers a local folder to a Drive path

@@ -25,7 +25,7 @@ cd ~/Apps/gdrive
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python main.py -h
+python main.py help
 ```
 
 ## External dependencies
@@ -92,9 +92,9 @@ Example config:
 
 ```bash
 gdrive
-gdrive -h
-gdrive -v
-gdrive -u
+gdrive help
+gdrive version
+gdrive upgrade
 gdrive config
 gdrive auth <client_secret_path>
 gdrive <preset> register <local_dir> as <drive_path>
@@ -118,7 +118,7 @@ python main.py auth ~/Documents/credentials/client_secret.json
 python main.py 1 register ~/Documents as "Documents"
 python main.py 2 register ~/Pictures as "Pictures"
 python main.py 1 upload ~/Downloads/report.pdf ~/Pictures
-python main.py -v
+python main.py version
 python main.py 1 list registrations
 python main.py sync run
 python main.py timer install
@@ -137,7 +137,7 @@ Notes:
 - `drive_path` is always relative to that preset's backup root. Do not include the root itself in `register`.
 - `sync run` is global. It syncs every registration across every configured preset.
 - `list registrations` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
-- `-v` prints the installed app version from the app's runtime version module. Source checkouts may keep a placeholder value until release automation stamps the shipped artifact.
+- `gdrive version` prints the installed app version from the app's runtime version module. Source checkouts may keep a placeholder value until release automation stamps the shipped artifact.
 - `gdrive sync restore` restores registered Drive folders into their configured local folders without deleting, uploading, or overwriting remote files.
 - The local folder is authoritative after restore. If you remove a local file, the matching Drive file is removed on the next `gdrive sync run`.
 - If a file is renamed locally without content changes, the CLI attempts to propagate it as a Drive rename/move by matching the prior snapshot.

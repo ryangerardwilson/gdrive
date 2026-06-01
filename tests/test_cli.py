@@ -21,7 +21,7 @@ from gdrive_cli.cli import (
 class CliUsageTests(unittest.TestCase):
     def test_help_is_human_friendly(self):
         with patch("sys.stdout", new=StringIO()) as stdout:
-            code = main(["-h"])
+            code = main(["help"])
         self.assertEqual(code, 0)
         output = stdout.getvalue()
         self.assertIn("gdrive", output)
@@ -47,9 +47,9 @@ class CliUsageTests(unittest.TestCase):
         self.assertNotIn("commands:", output)
         self.assertNotIn("usage:", output)
 
-    def test_no_args_prints_same_help_as_dash_h(self):
+    def test_no_args_prints_same_help_as_help(self):
         with patch("sys.stdout", new=StringIO()) as help_stdout:
-            help_code = main(["-h"])
+            help_code = main(["help"])
         with patch("sys.stdout", new=StringIO()) as no_args_stdout:
             no_args_code = main([])
         self.assertEqual(help_code, 0)
@@ -58,7 +58,7 @@ class CliUsageTests(unittest.TestCase):
 
     def test_version_prints_runtime_version_only(self):
         with patch("sys.stdout", new=StringIO()) as stdout:
-            code = main(["-v"])
+            code = main(["version"])
         self.assertEqual(code, 0)
         self.assertEqual(stdout.getvalue().strip(), "0.0.0")
 
@@ -81,7 +81,7 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(code, 0)
         urlopen.assert_called_once()
         self.assertEqual(subprocess_run.call_args.args[0][:2], ["/usr/bin/env", "bash"])
-        self.assertEqual(subprocess_run.call_args.args[0][-1], "-u")
+        self.assertEqual(subprocess_run.call_args.args[0][-1], "upgrade")
 
     def test_ensure_backup_root_name_prompts_and_saves_for_preset(self):
         with TemporaryDirectory() as tmp:
