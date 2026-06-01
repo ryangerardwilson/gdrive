@@ -134,14 +134,14 @@ write_public_launcher() {
     if [[ "$resolved" != "${INSTALL_DIR}/${APP}" ]]; then
       die "Refusing to overwrite existing symlink launcher: $PUBLIC_LAUNCHER"
     fi
-  elif [[ -f "$PUBLIC_LAUNCHER" ]] && ! grep -Fq '# Managed by rgw_cli_contract local-bin launcher' "$PUBLIC_LAUNCHER" 2>/dev/null; then
+  elif [[ -f "$PUBLIC_LAUNCHER" ]] && ! grep -Fq "exec \"${INSTALL_DIR}/${APP}\" \"\$@\"" "$PUBLIC_LAUNCHER" 2>/dev/null; then
     die "Refusing to overwrite existing launcher: $PUBLIC_LAUNCHER"
   fi
 
   mkdir -p "$PUBLIC_BIN_DIR"
   cat > "${PUBLIC_LAUNCHER}" <<EOF
 #!/usr/bin/env bash
-# Managed by rgw_cli_contract local-bin launcher
+# Managed by gdrive local-bin launcher
 set -euo pipefail
 exec "${INSTALL_DIR}/${APP}" "\$@"
 EOF

@@ -54,8 +54,8 @@ Recommended setup:
 
 ```bash
 python main.py auth /path/to/client_secret.json
-python main.py 1 reg ~/Documents "Documents"
-python main.py run
+python main.py 1 register ~/Documents as "Documents"
+python main.py sync run
 ```
 
 ## Storage
@@ -95,56 +95,61 @@ gdrive
 gdrive -h
 gdrive -v
 gdrive -u
+gdrive config
 gdrive auth <client_secret_path>
-gdrive <preset> reg <local_dir> <drive_path>
-gdrive <preset> ls
-gdrive <preset> up <file_path> <file_path> ...
-gdrive run
-gdrive <preset> rm <edit_id>
-gdrive ti
-gdrive td
-gdrive st
+gdrive <preset> register <local_dir> as <drive_path>
+gdrive <preset> list registrations
+gdrive <preset> browse
+gdrive <preset> upload <file_path> <file_path> ...
+gdrive <preset> restore registrations
+gdrive <preset> restore registration <id>
+gdrive <preset> remove registration <id>
+gdrive sync restore
+gdrive sync run
+gdrive timer install
+gdrive timer disable
+gdrive timer status
 ```
 
 Examples:
 
 ```bash
 python main.py auth ~/Documents/credentials/client_secret.json
-python main.py 1 reg ~/Documents "Documents"
-python main.py 2 reg ~/Pictures "Pictures"
-python main.py 1 up ~/Downloads/report.pdf ~/Pictures
+python main.py 1 register ~/Documents as "Documents"
+python main.py 2 register ~/Pictures as "Pictures"
+python main.py 1 upload ~/Downloads/report.pdf ~/Pictures
 python main.py -v
-python main.py 1 ls
-python main.py run
-python main.py ti
+python main.py 1 list registrations
+python main.py sync run
+python main.py timer install
 ```
 
 Notes:
 - Each preset is an independent Google account setup with its own OAuth token, backup root, and registrations.
 - `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
 - Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
-- `nav` uses `l` to enter directories or download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
-- `nav` uses `Enter` to download a file into the current working directory from which you launched `gdrive`.
-- In normal `nav`, pressing `Enter` on a directory downloads it, extracts it into a normal directory in the current working directory, and removes the temporary `.zip`.
-- `up <file_path> ...` opens the same navigator in upload-picker mode; press `Enter` on a directory to upload there, or on a file to upload into that file's parent directory.
+- `browse` uses `l` to enter directories or download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
+- `browse` uses `Enter` to download a file into the current working directory from which you launched `gdrive`.
+- In normal `browse`, pressing `Enter` on a directory downloads it, extracts it into a normal directory in the current working directory, and removes the temporary `.zip`.
+- `upload <file_path> ...` opens the same navigator in upload-picker mode; press `Enter` on a directory to upload there, or on a file to upload into that file's parent directory.
 - `handlers` use the same object form as `o`: `commands` is a list of commands to try, `{file}` is substituted if present, and `is_internal: true` runs the handler in the current terminal after suspending the TUI.
 - `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
-- `drive_path` is always relative to that preset's backup root. Do not include the root itself in `reg`.
-- `run` is global. It syncs every registration across every configured preset.
-- `ls` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
+- `drive_path` is always relative to that preset's backup root. Do not include the root itself in `register`.
+- `sync run` is global. It syncs every registration across every configured preset.
+- `list registrations` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
 - `-v` prints the installed app version from the app's runtime version module. Source checkouts may keep a placeholder value until release automation stamps the shipped artifact.
-- `gdrive pull` restores registered Drive folders into their configured local folders without deleting, uploading, or overwriting remote files.
-- The local folder is authoritative after restore. If you remove a local file, the matching Drive file is removed on the next `gdrive run`.
+- `gdrive sync restore` restores registered Drive folders into their configured local folders without deleting, uploading, or overwriting remote files.
+- The local folder is authoritative after restore. If you remove a local file, the matching Drive file is removed on the next `gdrive sync run`.
 - If a file is renamed locally without content changes, the CLI attempts to propagate it as a Drive rename/move by matching the prior snapshot.
 - Remote files created manually inside a managed Drive folder are deleted on the next sync if they do not exist locally.
 
 ## Timer
 
-`ti` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive run` across all presets. Run `gdrive pull` first on a fresh machine so registered folders such as music and books are hydrated locally before the local-authoritative timer starts. The service sends desktop notifications through the Quickshell bar when the timer run starts, succeeds, or fails, falling back to `notify-send` when the bar is unavailable.
+`timer install` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive sync run` across all presets. Run `gdrive sync restore` first on a fresh machine so registered folders such as music and books are hydrated locally before the local-authoritative timer starts. The service sends desktop notifications through the Quickshell bar when the timer run starts, succeeds, or fails, falling back to `notify-send` when the bar is unavailable.
 
 ```bash
-python main.py pull
-python main.py ti
+python main.py sync restore
+python main.py timer install
 systemctl --user list-timers gdrive.timer
 ```
 
@@ -152,8 +157,8 @@ systemctl --user list-timers gdrive.timer
 
 1. Run an interactive command and enter the client secret path and backup root when prompted.
 2. Register a small local test directory.
-3. Run `run` and complete OAuth in the browser.
+3. Run `sync run` and complete OAuth in the browser.
 4. Verify files appear in `My Drive/<backup_root_name>/...`.
-5. Rename a local file and run `run` again.
-6. Delete a local file and run `run` again.
-7. Create a remote-only file in the managed Drive folder and verify the next `run` removes it.
+5. Rename a local file and run `sync run` again.
+6. Delete a local file and run `sync run` again.
+7. Create a remote-only file in the managed Drive folder and verify the next `sync run` removes it.

@@ -13,6 +13,7 @@ from gdrive_cli.cli import (
     run_restore_all,
     run_nav,
     run_upload_picker,
+    upgrade_app,
     write_timer_units,
 )
 
@@ -28,20 +29,59 @@ class CliUsageTests(unittest.TestCase):
         self.assertIn("authorize a Google account and save or refresh its preset", output)
         self.assertIn("register folders to sync into Drive, then inspect or remove registrations", output)
         self.assertIn("# gdrive auth <client_secret_path>", output)
-        self.assertIn("# gdrive <preset> reg <local_dir> <drive_path> | gdrive <preset> ls | gdrive <preset> rm <edit_id>", output)
-        self.assertIn("gdrive 1 reg ~/Documents Documents", output)
-        self.assertIn("gdrive 1 nav", output)
-        self.assertIn("gdrive 1 up ~/Downloads/report.pdf ~/Pictures", output)
-        self.assertIn("gdrive pull", output)
-        self.assertIn("gdrive run", output)
+        self.assertIn(
+            "# gdrive <preset> register <local_dir> as <drive_path> | gdrive <preset> list registrations | gdrive <preset> remove registration <id>",
+            output,
+        )
+        self.assertIn("gdrive 1 register ~/Documents as Documents", output)
+        self.assertIn("gdrive 1 browse", output)
+        self.assertIn("gdrive 1 upload ~/Downloads/report.pdf ~/Pictures", output)
+        self.assertIn("gdrive sync restore", output)
+        self.assertIn("gdrive sync run", output)
         self.assertIn("install, disable, or inspect the hourly systemd timer", output)
-        self.assertIn("# gdrive ti | gdrive td | gdrive st", output)
-        self.assertIn("gdrive ti", output)
-        self.assertIn("gdrive td", output)
-        self.assertIn("gdrive st", output)
-        self.assertIn("gdrive conf", output)
+        self.assertIn("# gdrive timer install | gdrive timer disable | gdrive timer status", output)
+        self.assertIn("gdrive timer install", output)
+        self.assertIn("gdrive timer disable", output)
+        self.assertIn("gdrive timer status", output)
+        self.assertIn("gdrive config", output)
         self.assertNotIn("commands:", output)
         self.assertNotIn("usage:", output)
+
+    def test_no_args_prints_same_help_as_dash_h(self):
+        with patch("sys.stdout", new=StringIO()) as help_stdout:
+            help_code = main(["-h"])
+        with patch("sys.stdout", new=StringIO()) as no_args_stdout:
+            no_args_code = main([])
+        self.assertEqual(help_code, 0)
+        self.assertEqual(no_args_code, 0)
+        self.assertEqual(no_args_stdout.getvalue(), help_stdout.getvalue())
+
+    def test_version_prints_runtime_version_only(self):
+        with patch("sys.stdout", new=StringIO()) as stdout:
+            code = main(["-v"])
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "0.0.0")
+
+    def test_upgrade_downloads_installer_and_runs_upgrade_mode(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b"#!/usr/bin/env bash\n"
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()) as urlopen, patch(
+            "subprocess.run"
+        ) as subprocess_run:
+            subprocess_run.return_value.returncode = 0
+            code = upgrade_app()
+        self.assertEqual(code, 0)
+        urlopen.assert_called_once()
+        self.assertEqual(subprocess_run.call_args.args[0][:2], ["/usr/bin/env", "bash"])
+        self.assertEqual(subprocess_run.call_args.args[0][-1], "-u")
 
     def test_ensure_backup_root_name_prompts_and_saves_for_preset(self):
         with TemporaryDirectory() as tmp:
@@ -74,15 +114,15 @@ class CliUsageTests(unittest.TestCase):
                     with patch("builtins.input", return_value=secret_path):
                         self.assertEqual(str(ensure_client_secret("2", interactive=True)), secret_path)
 
-    def test_nav_dispatches_to_run_nav(self):
+    def test_browse_dispatches_to_run_nav(self):
         with patch("gdrive_cli.cli.run_nav", return_value=0) as run_nav:
-            code = main(["1", "nav"])
+            code = main(["1", "browse"])
         self.assertEqual(code, 0)
         run_nav.assert_called_once_with("1")
 
-    def test_up_dispatches_to_run_upload_picker(self):
+    def test_upload_dispatches_to_run_upload_picker(self):
         with patch("gdrive_cli.cli.run_upload_picker", return_value=0) as run_upload_picker:
-            code = main(["1", "up", "/tmp/a", "/tmp/b"])
+            code = main(["1", "upload", "/tmp/a", "/tmp/b"])
         self.assertEqual(code, 0)
         run_upload_picker.assert_called_once_with("1", ["/tmp/a", "/tmp/b"])
 
@@ -131,7 +171,7 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("uploaded\tfiles=1\tdirs=0\ttarget=/Uploads", stdout.getvalue())
 
-    def test_conf_opens_config_in_visual_then_editor_then_vim(self):
+    def test_config_opens_config_in_visual_then_editor_then_vim(self):
         with TemporaryDirectory() as tmp:
             with patch.dict(
                 "os.environ",
@@ -144,14 +184,14 @@ class CliUsageTests(unittest.TestCase):
             ):
                 with patch("subprocess.run") as subprocess_run:
                     subprocess_run.return_value.returncode = 0
-                    code = main(["conf"])
+                    code = main(["config"])
             self.assertEqual(code, 0)
             subprocess_run.assert_called_once()
             self.assertEqual(subprocess_run.call_args.args[0][0], "nvim")
 
     def test_build_runtime_command_uses_launcher_only_when_frozen(self):
         with patch("sys.executable", "/tmp/gdrive"), patch("sys.frozen", True, create=True):
-            self.assertEqual(_build_runtime_command("run"), "/tmp/gdrive run")
+            self.assertEqual(_build_runtime_command("sync", "run"), "/tmp/gdrive sync run")
 
     def test_write_timer_units_uses_launcher_only_when_frozen(self):
         with TemporaryDirectory() as tmp:
@@ -165,8 +205,8 @@ class CliUsageTests(unittest.TestCase):
             service_body = service_path.read_text(encoding="utf-8")
             timer_body = timer_path.read_text(encoding="utf-8")
             self.assertIn("ExecStart=/usr/bin/env bash -lc", service_body)
-            self.assertIn("if /tmp/gdrive run; then", service_body)
-            self.assertNotIn("main.py run", service_body)
+            self.assertIn("if /tmp/gdrive sync run; then", service_body)
+            self.assertNotIn("main.py sync run", service_body)
             self.assertIn("OnActiveSec=5m", timer_body)
             self.assertIn("quickshell ipc -p \"$qs\" call bar notify", service_body)
             self.assertIn("notify-send", service_body)
@@ -178,7 +218,7 @@ class CliUsageTests(unittest.TestCase):
         with patch("gdrive_cli.cli.write_timer_units") as write_units, patch(
             "gdrive_cli.cli.systemctl_user"
         ) as systemctl_user:
-            code = main(["ti"])
+            code = main(["timer", "install"])
         self.assertEqual(code, 0)
         write_units.assert_called_once()
         systemctl_user.assert_any_call("daemon-reload")
@@ -212,8 +252,8 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(update_registration.call_count, 2)
         self.assertIn("downloaded=2", stdout.getvalue())
 
-    def test_preset_pull_dispatches_single_registration(self):
+    def test_preset_restore_dispatches_single_registration(self):
         with patch("gdrive_cli.cli._restore_account_registrations", return_value=True) as restore:
-            code = main(["1", "pull", "2"])
+            code = main(["1", "restore", "registration", "2"])
         self.assertEqual(code, 0)
         restore.assert_called_once_with("1", "2")

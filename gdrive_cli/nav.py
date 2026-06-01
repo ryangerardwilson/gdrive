@@ -96,7 +96,7 @@ Navigation
   h               Parent directory
   l               Enter directory or open file through handlers
   j / k           Down / Up
-  Enter           Download files or directories to cwd, or confirm upload target in up mode
+  Enter           Download files or directories to cwd, or confirm upload target in upload mode
   Esc             Exit visual mode, or quit when visual mode is off
 
 Clipboard & Multi Operations

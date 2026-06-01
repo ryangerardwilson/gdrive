@@ -1,8 +1,8 @@
 # AGENTS.md
 
 ## Workspace Defaults
-- Follow `/home/ryan/Documents/agent_context/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
-- Follow `/home/ryan/Documents/agent_context/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
+- Follow `/home/ryan/Subagents/cpo/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
+- Follow `/home/ryan/Subagents/cto/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
 - This file only records `gdrive`-specific constraints or durable deviations.
 
 ## Mission
@@ -18,18 +18,25 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 ## Interface constraints
 - Keep the command surface compact and keyboard-first.
 - No-arg invocation prints the same help as `-h`.
-- Primary verbs for v1:
-  - `auth` to authorize a Google account and create/update a preset
-  - `reg` to register a local folder -> Drive path mapping
-  - `ls` to list registrations
-  - `run` to sync all registrations across all presets
-  - `rm` to remove a registration
-  - `ti`, `td`, `st` for timer install/disable/status
+- Canonical commands are declarative English only:
+  - `gdrive auth <client_secret_path>` authorizes a Google account and creates or updates a preset
+  - `gdrive <preset> register <local_dir> as <drive_path>` registers a local folder to a Drive path
+  - `gdrive <preset> list registrations` lists registrations
+  - `gdrive <preset> remove registration <id>` removes a registration
+  - `gdrive <preset> browse` opens the Drive navigator
+  - `gdrive <preset> upload <path...>` opens upload-picker mode for local paths
+  - `gdrive sync run` syncs all registrations across all presets
+  - `gdrive sync restore` restores all registered folders without deleting remote files
+  - `gdrive <preset> restore registrations` restores one preset
+  - `gdrive <preset> restore registration <id>` restores one registration
+  - `gdrive timer install|disable|status` manages the user-level systemd timer
+  - `gdrive config` opens the editable app config
 - `auth <client_secret_path>` is the only no-preset account bootstrap command.
-- `reg`, `ls`, and `rm` are preset-scoped: `gdrive <preset> <command> ...`.
-- `run`, `ti`, `td`, and `st` are global and must not take a preset.
-- `pull` is the non-destructive fresh-machine restore path. It must hydrate local registered folders from Drive and seed sync state before any timer-driven `run`.
+- Registration, browse, upload, and preset restore commands are preset-scoped.
+- `sync run`, `sync restore`, and `timer install|disable|status` are global and must not take a preset.
+- `sync restore` is the non-destructive fresh-machine restore path. It must hydrate local registered folders from Drive and seed sync state before any timer-driven `sync run`.
 - Output should stay plain-text and deterministic.
+- Do not keep terse aliases such as `reg`, `ls`, `rm`, `nav`, `up`, `run`, `pull`, `ti`, `td`, `st`, or `conf` as product surfaces.
 
 ## Architecture expectations
 - Keep CLI parsing separate from Drive API calls and sync planning.
@@ -51,7 +58,7 @@ Implement a Google Drive backup CLI that treats the local filesystem as the sour
 ## Done when
 - A user can authenticate with a Google desktop OAuth client.
 - A user can register one or more local folders with Drive target paths under a numeric preset.
-- `run` makes Drive match local content across every configured preset, including local deletes.
+- `sync run` makes Drive match local content across every configured preset, including local deletes.
 - Content-preserving local file renames are propagated as Drive moves/renames when detectable; otherwise the end state must still match local.
-- `ti` installs one hourly user timer that runs the same global sync command and sends notifications through the Quickshell bar, with `notify-send` only as a fallback.
-- Fresh-machine restore can run `gdrive pull` before `gdrive ti` without deleting remote files due to an empty local tree.
+- `timer install` installs one hourly user timer that runs the same global sync command and sends notifications through the Quickshell bar, with `notify-send` only as a fallback.
+- Fresh-machine restore can run `gdrive sync restore` before `gdrive timer install` without deleting remote files due to an empty local tree.

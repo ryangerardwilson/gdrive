@@ -16,7 +16,7 @@ class UploadSummary:
 
 def normalize_upload_paths(values: list[str]) -> list[Path]:
     if not values:
-        raise CliError("usage: gdrive <preset> up <file_path> <file_path> ...")
+        raise CliError("usage: gdrive <preset> upload <file_path> <file_path> ...")
     paths: list[Path] = []
     for raw_value in values:
         path = Path(raw_value).expanduser().resolve()
