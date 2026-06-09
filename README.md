@@ -2,61 +2,36 @@
 
 Google Drive backup CLI with local-first sync semantics.
 
-## Install
+`gdrive` is now a Go binary. The command grammar, config shape, token location,
+and sync state files remain compatible with the previous Python app, while the
+terminal navigator is a smaller Bubble Tea UI.
 
-Binary install:
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ryangerardwilson/gdrive/main/install.sh | bash
 ```
 
-If `~/.local/bin` is not already on your `PATH`, add it once to `~/.bashrc`
-and reload your shell:
+The installer places the binary at `~/.gdrive/bin/gdrive` and writes the public
+launcher at `~/.local/bin/gdrive`.
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-source ~/.bashrc
-```
-
-Source install:
-
-```bash
-cd ~/Apps/gdrive
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py help
-```
-
-## External dependencies
-
-- Quickshell with the `omarchy-bar` IPC toast endpoint for timer notifications
-- `notify-send` as a fallback when the Quickshell bar is not running
-
-## Google OAuth setup
+## Google OAuth Setup
 
 1. Open Google Cloud Console.
 2. Create or select a project.
 3. Enable the Google Drive API.
 4. Configure the OAuth consent screen.
-5. Create an `OAuth client ID` with application type `Desktop app`.
+5. Create an OAuth client ID with application type `Desktop app`.
 6. Download the client JSON.
-The first interactive command asks for:
-- the preset-specific client secret JSON path
-- the preset-specific Google Drive folder name that should hold all managed backups
 
-The first authenticated sync opens a browser and stores the refresh token
-locally. If the final browser page says `localhost refused to connect`, keep
-the terminal open and paste the full `localhost` URL from the browser address
-bar when prompted.
-
-Recommended setup:
+Authorize a preset:
 
 ```bash
-python main.py auth /path/to/client_secret.json
-python main.py 1 register ~/Documents as "Documents"
-python main.py sync run
+gdrive auth ~/Documents/credentials/client_secret.json
 ```
+
+The first authorization stores the token by account email under
+`~/.local/share/gdrive/tokens/`.
 
 ## Storage
 
@@ -65,7 +40,7 @@ python main.py sync run
 - OAuth token: `~/.local/share/gdrive/tokens/<email>.json`
 - Per-registration sync state: `~/.local/share/gdrive/state/<preset>-<id>.json`
 
-Example config:
+Config shape:
 
 ```json
 {
@@ -77,14 +52,7 @@ Example config:
       "registrations": []
     }
   },
-  "handlers": {
-    "pdf_viewer": { "commands": [["zathura"]], "is_internal": false },
-    "image_viewer": { "commands": [["swayimg"]], "is_internal": false },
-    "csv_viewer": { "commands": [["vixl"]], "is_internal": true },
-    "xlsx_viewer": { "commands": [["vixl"]], "is_internal": true },
-    "audio_player": { "commands": [["alacritty", "-e", "rlc"]], "is_internal": false },
-    "video_player": { "commands": [["alacritty", "-e", "ffplay", "-nodisp", "-autoexit"]], "is_internal": false }
-  }
+  "handlers": {}
 }
 ```
 
@@ -114,51 +82,52 @@ gdrive timer status
 Examples:
 
 ```bash
-python main.py auth ~/Documents/credentials/client_secret.json
-python main.py 1 register ~/Documents as "Documents"
-python main.py 2 register ~/Pictures as "Pictures"
-python main.py 1 upload ~/Downloads/report.pdf ~/Pictures
-python main.py version
-python main.py 1 list registrations
-python main.py sync run
-python main.py timer install
+gdrive auth ~/Documents/credentials/client_secret.json
+gdrive 1 register ~/Documents as Documents
+gdrive 1 list registrations
+gdrive 1 browse
+gdrive 1 upload ~/Downloads/report.pdf ~/Pictures
+gdrive sync restore
+gdrive sync run
+gdrive timer install
 ```
 
 Notes:
-- Each preset is an independent Google account setup with its own OAuth token, backup root, and registrations.
-- `auth <client_secret_path>` is the canonical way to add a new Google account. It completes OAuth, discovers the account email, writes or updates the config entry, and prints the assigned preset.
-- Normal app runs only use email-named tokens. Legacy token names are not read implicitly.
-- `browse` uses `l` to enter directories or download a file to a temp path and open it through `handlers`, matching the `o` app's handler shape.
-- `browse` uses `Enter` to download a file into the current working directory from which you launched `gdrive`.
-- In normal `browse`, pressing `Enter` on a directory downloads it, extracts it into a normal directory in the current working directory, and removes the temporary `.zip`.
-- `upload <file_path> ...` opens the same navigator in upload-picker mode; press `Enter` on a directory to upload there, or on a file to upload into that file's parent directory.
-- `handlers` use the same object form as `o`: `commands` is a list of commands to try, `{file}` is substituted if present, and `is_internal: true` runs the handler in the current terminal after suspending the TUI.
-- `backup_root_name` is the single top-level Drive folder under `My Drive` that holds all managed backups for that preset.
-- `drive_path` is always relative to that preset's backup root. Do not include the root itself in `register`.
-- `sync run` is global. It syncs every registration across every configured preset.
-- `list registrations` prints each registration as a simple record and includes the Drive folder URL once the folder exists remotely.
-- `gdrive version` prints the installed app version from the app's runtime version module. Source checkouts may keep a placeholder value until release automation stamps the shipped artifact.
-- `gdrive sync restore` restores registered Drive folders into their configured local folders without deleting, uploading, or overwriting remote files.
-- The local folder is authoritative after restore. If you remove a local file, the matching Drive file is removed on the next `gdrive sync run`.
-- If a file is renamed locally without content changes, the CLI attempts to propagate it as a Drive rename/move by matching the prior snapshot.
-- Remote files created manually inside a managed Drive folder are deleted on the next sync if they do not exist locally.
+
+- Each preset is an independent Google account setup with its own OAuth token,
+  backup root, and registrations.
+- `auth <client_secret_path>` is the account bootstrap command.
+- `backup_root_name` is the single top-level Drive folder under My Drive that
+  holds all managed backups for that preset.
+- `drive_path` is always relative to that preset backup root. Do not include the
+  root itself in `register`.
+- `sync restore` hydrates registered local folders from Drive and seeds sync
+  state before the local-authoritative timer starts.
+- `sync run` makes Drive match local content, including local deletes and
+  detectable content-preserving renames.
+- `browse` downloads the selected file to the current working directory; folder
+  downloads are zipped.
+- `upload <path...>` opens the Drive navigator in upload mode and uploads the
+  paths into the selected Drive folder.
 
 ## Timer
 
-`timer install` writes one global user service to `~/.config/systemd/user/` and enables an hourly timer that runs `gdrive sync run` across all presets. Run `gdrive sync restore` first on a fresh machine so registered folders such as music and books are hydrated locally before the local-authoritative timer starts. The service sends desktop notifications through the Quickshell bar when the timer run starts, succeeds, or fails, falling back to `notify-send` when the bar is unavailable.
+`timer install` writes a global user service and hourly timer under
+`~/.config/systemd/user/`. The service sends desktop notifications through the
+Quickshell `omarchy-bar` IPC endpoint when available, falling back to
+`notify-send`.
 
 ```bash
-python main.py sync restore
-python main.py timer install
+gdrive sync restore
+gdrive timer install
 systemctl --user list-timers gdrive.timer
 ```
 
-## Manual test checklist
+## Development
 
-1. Run an interactive command and enter the client secret path and backup root when prompted.
-2. Register a small local test directory.
-3. Run `sync run` and complete OAuth in the browser.
-4. Verify files appear in `My Drive/<backup_root_name>/...`.
-5. Rename a local file and run `sync run` again.
-6. Delete a local file and run `sync run` again.
-7. Create a remote-only file in the managed Drive folder and verify the next `sync run` removes it.
+```bash
+go test ./...
+go run ./cmd/gdrive help
+./install.sh from .
+./push_release_upgrade.sh
+```
